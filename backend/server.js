@@ -69,6 +69,9 @@ app.use("/api/notifications",      require("./routes/notificationRoutes"));
 // Dashboard
 app.use("/api/dashboard",          require("./routes/dashboardRoutes"));
 
+// Reports & Analytics
+app.use("/api/reports",            require("./routes/reportRoutes"));
+
 /* ═══════════════════════════════════════════
    HEALTH CHECK
 ═══════════════════════════════════════════ */

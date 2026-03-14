@@ -1,14 +1,22 @@
 const { getPool } = require("../config/db");
 const stockModel = require("./inventoryStockModel");
+const alertService = require("../services/alertService");
 
 /**
- * Create a stock adjustment record and update inventory_stocks to actual quantity.
+ * Create a stock adjustment record.
+ * system_quantity is auto-read from DB if not provided.
  */
 const create = async ({ product_id, warehouse_id, system_quantity, actual_quantity, reason = null, user_id }) => {
   const pool = getPool();
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+
+    // Auto-fetch system quantity from current inventory if not provided
+    if (system_quantity == null) {
+      const stock = await stockModel.getStock(product_id, warehouse_id);
+      system_quantity = stock?.quantity ?? 0;
+    }
 
     const [res] = await conn.execute(
       `INSERT INTO stock_adjustments (product_id, warehouse_id, system_quantity, actual_quantity, reason, user_id)
@@ -28,6 +36,10 @@ const create = async ({ product_id, warehouse_id, system_quantity, actual_quanti
     );
 
     await conn.commit();
+
+    // After commit — check for low stock alert (non-blocking)
+    alertService.checkAndAlert(product_id, warehouse_id);
+
     return findById(res.insertId);
   } catch (err) {
     await conn.rollback();
@@ -40,8 +52,10 @@ const create = async ({ product_id, warehouse_id, system_quantity, actual_quanti
 const findAll = async ({ productId, warehouseId } = {}) => {
   const pool = getPool();
   let sql = `
-    SELECT sa.*, p.name AS product_name, p.sku, w.name AS warehouse_name,
-           u.name AS adjusted_by
+    SELECT sa.*, p.name AS product_name, p.sku, p.unit,
+           w.name AS warehouse_name,
+           u.name AS adjusted_by,
+           (sa.actual_quantity - sa.system_quantity) AS delta
     FROM stock_adjustments sa
     JOIN products p ON sa.product_id = p.id
     JOIN warehouses w ON sa.warehouse_id = w.id
@@ -58,7 +72,9 @@ const findAll = async ({ productId, warehouseId } = {}) => {
 const findById = async (id) => {
   const pool = getPool();
   const [rows] = await pool.execute(
-    `SELECT sa.*, p.name AS product_name, p.sku, w.name AS warehouse_name, u.name AS adjusted_by
+    `SELECT sa.*, p.name AS product_name, p.sku, p.unit,
+            w.name AS warehouse_name, u.name AS adjusted_by,
+            (sa.actual_quantity - sa.system_quantity) AS delta
      FROM stock_adjustments sa
      JOIN products p ON sa.product_id = p.id
      JOIN warehouses w ON sa.warehouse_id = w.id
@@ -69,4 +85,12 @@ const findById = async (id) => {
   return rows[0] || null;
 };
 
-module.exports = { create, findAll, findById };
+/**
+ * Get current system quantity for a product+warehouse (for the frontend to display).
+ */
+const getSystemQuantity = async (productId, warehouseId) => {
+  const stock = await stockModel.getStock(productId, warehouseId);
+  return stock?.quantity ?? 0;
+};
+
+module.exports = { create, findAll, findById, getSystemQuantity };
