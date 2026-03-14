@@ -1,22 +1,19 @@
-const router = require("express").Router();
-const ctrl = require("../controllers/transferController");
-const { protect, authorize } = require("../middleware/authMiddleware");
+const express = require("express");
+const router = express.Router();
 
-const MANAGER = "inventory_manager";
-const BOTH    = [MANAGER, "warehouse_staff"];
+const {
+  getTransfers,
+  getTransferDetails,
+  createTransfer,
+  updateTransferStatus,
+} = require("../controllers/transferController");
+const { protect } = require("../middleware/authMiddleware");
 
-// ─── List & Detail ───────────────────────────────────
-router.get  ("/",                       protect, authorize(...BOTH), ctrl.getAll);
-router.get  ("/:id",                    protect, authorize(...BOTH), ctrl.getOne);
+router.use(protect); // All transfer routes are protected
 
-// ─── Create & Edit (Manager only) ────────────────────
-router.post ("/",                       protect, authorize(MANAGER), ctrl.create);
-router.put  ("/:id",                    protect, authorize(MANAGER), ctrl.update);
-router.patch("/:id/status",             protect, authorize(MANAGER), ctrl.updateStatus);
-
-// ─── Line Items (Manager, draft only) ────────────────
-router.post  ("/:id/items",             protect, authorize(MANAGER), ctrl.addItems);
-router.put   ("/:id/items/:itemId",     protect, authorize(MANAGER), ctrl.updateItem);
-router.delete("/:id/items/:itemId",     protect, authorize(MANAGER), ctrl.removeItem);
+router.get("/", getTransfers);
+router.get("/:id", getTransferDetails);
+router.post("/", createTransfer);
+router.put("/:id/status", updateTransferStatus);
 
 module.exports = router;

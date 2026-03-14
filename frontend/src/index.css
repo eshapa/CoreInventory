@@ -56,6 +56,9 @@
   --card-foreground: 222 20% 18%;
   --card-border: 214 32% 91%;
   
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 20% 18%;
+  
   --border: 214 32% 91%;
   --input: 214 32% 91%;
   --ring: 221 83% 53%;
@@ -201,20 +204,25 @@ body {
   text-decoration: none;
 }
 
-.sidebar-item:hover {
-  background-color: hsl(var(--sidebar-hover));
-  color: hsl(var(--primary));
-}
-
-.sidebar-item.active {
+.sidebar-item-active {
   background-color: hsl(var(--primary));
   color: white;
   font-weight: 600;
   box-shadow: var(--shadow-primary);
 }
 
-.sidebar-item.active svg {
+.sidebar-item-active svg {
   color: white;
+}
+
+.sidebar-item-inactive {
+  background-color: transparent;
+  color: hsl(var(--sidebar-foreground));
+}
+
+.sidebar-item-inactive:hover {
+  background-color: hsl(var(--sidebar-hover));
+  color: hsl(var(--primary));
 }
 
 .sidebar-item svg {

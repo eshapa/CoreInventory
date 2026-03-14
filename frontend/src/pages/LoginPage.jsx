@@ -1,21 +1,51 @@
 import * as React from "react";
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import { Box, Eye, EyeOff } from "lucide-react";
+import { useAuth } from "../contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { login, isAuthenticated, user } = useAuth();
+  
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleLogin = (e) => {
+  // If already authenticated, redirect immediately
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isAuthenticated, user, navigate]);
+
+  const handleLogin = async (e) => {
     e.preventDefault();
-    // In a real app, you'd add your auth logic here
-    navigate("/dashboard");
+    if (isSubmitting) return;
+
+    try {
+      setIsSubmitting(true);
+      const userData = await login(email, password);
+      
+      // Navigate to intended page or generic dashboard
+      const destination = location.state?.from?.pathname || '/dashboard';
+      navigate(destination, { replace: true });
+    } catch (error) {
+      console.error("Login failed", error);
+      if (
+        error.response?.status === 403 && 
+        error.response?.data?.message?.includes("verify your email")
+      ) {
+        navigate('/verify-email', { state: { email } });
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -74,12 +104,12 @@ export default function LoginPage() {
             <div className="space-y-2">
               <div className="flex justify-between">
                 <Label htmlFor="password">Password</Label>
-                <button 
-                  type="button" 
+                <Link 
+                  to="/forgot-password"
                   className="text-sm text-primary hover:underline focus:outline-none"
                 >
                   Forgot password?
-                </button>
+                </Link>
               </div>
               <div className="relative">
                 <Input
@@ -105,16 +135,16 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <Button type="submit" className="w-full h-11 font-semibold">
-              Sign In
+            <Button type="submit" className="w-full h-11 font-semibold" disabled={isSubmitting}>
+              {isSubmitting ? "Signing In..." : "Sign In"}
             </Button>
           </form>
           
           <p className="text-center text-sm text-muted-foreground mt-6">
             Don't have an account?{" "}
-            <button className="text-primary hover:underline font-medium">
-              Contact Admin
-            </button>
+            <Link to="/register" className="text-primary hover:underline font-medium">
+              Sign up
+            </Link>
           </p>
         </div>
       </div>

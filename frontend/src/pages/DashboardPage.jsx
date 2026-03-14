@@ -115,7 +115,10 @@ export default function DashboardPage() {
                   dataKey="value"
                 >
                   {categoryDistribution.map((entry, index) => (
-                    <Cell key={index} fill={entry.fill} />
+                    <Cell 
+                      key={`cell-${index}`} 
+                      fill={entry.fill || ["#6366f1", "#10b981", "#f59e0b", "#3b82f6", "#ef4444"][index % 5]} 
+                    />
                   ))}
                 </Pie>
 

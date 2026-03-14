@@ -1,15 +1,19 @@
 import { Search, Bell, Plus } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { useAuth } from "../contexts/AuthContext";
 
 function DashboardHeader() {
+  const { user } = useAuth();
+  const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : "UI";
+
   return (
     <header className="h-16 border-b border-border bg-card flex items-center justify-between px-6 sticky top-0 z-40">
       
       {/* Search */}
       <div className="relative w-80">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-
+ 
         <Input
           placeholder="Search products, warehouses..."
           className="pl-10 bg-secondary/50 border-0 focus-visible:ring-1"
@@ -30,7 +34,7 @@ function DashboardHeader() {
         </button>
 
         <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-sm font-semibold">
-          JS
+          {initials}
         </div>
 
       </div>

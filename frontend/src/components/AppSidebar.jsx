@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { useState } from "react";
+import { useAuth } from "../contexts/AuthContext";
 
 // If "@/lib/utils" doesn't work, change it to "../lib/utils"
 import { cn } from "../lib/utils";
@@ -34,7 +35,13 @@ const navItems = [
 function AppSidebar() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
+
+  const handleLogout = () => {
+    logout();
+    navigate("/login");
+  };
 
   return (
     <aside
@@ -94,7 +101,7 @@ function AppSidebar() {
       {/* Logout */}
       <div className="p-3 border-t border-sidebar-border">
         <button
-          onClick={() => navigate("/")}
+          onClick={handleLogout}
           className="sidebar-item sidebar-item-inactive w-full"
           title={collapsed ? "Logout" : undefined}
         >

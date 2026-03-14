@@ -1,81 +1,86 @@
 const { getPool } = require("../config/db");
-const stockModel = require("./inventoryStockModel");
 const AppError = require("../utils/AppError");
-const alertService = require("../services/alertService");
 
-const TRANSFER_COLS = `
-  t.id,
-  t.source_warehouse_id,      sw.name AS source_warehouse_name,
-  t.destination_warehouse_id, dw.name AS destination_warehouse_name,
-  t.status, t.notes, t.created_by, u.name AS created_by_name, t.created_at`;
-
-const findAll = async ({ status, warehouseId, search } = {}) => {
+/**
+ * Get all transfers with joined details
+ */
+const getAllTransfers = async () => {
   const pool = getPool();
-  let sql = `
-    SELECT ${TRANSFER_COLS}
+  
+  const [rows] = await pool.execute(`
+    SELECT t.id, t.source_warehouse_id, t.destination_warehouse_id, 
+           t.status, t.notes, t.created_by, t.created_at,
+           w1.name AS source_warehouse_name,
+           w2.name AS destination_warehouse_name,
+           u.name AS created_by_name
     FROM transfers t
-    JOIN warehouses sw ON t.source_warehouse_id      = sw.id
-    JOIN warehouses dw ON t.destination_warehouse_id = dw.id
-    LEFT JOIN users u ON t.created_by = u.id
-    WHERE 1=1`;
-  const params = [];
-  if (status)      { sql += " AND t.status = ?"; params.push(status); }
-  if (warehouseId) { sql += " AND (t.source_warehouse_id = ? OR t.destination_warehouse_id = ?)"; params.push(warehouseId, warehouseId); }
-  if (search)      { sql += " AND (sw.name LIKE ? OR dw.name LIKE ? OR t.notes LIKE ?)"; params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
-  sql += " ORDER BY t.created_at DESC";
-  const [rows] = await pool.execute(sql, params);
+    JOIN warehouses w1 ON w1.id = t.source_warehouse_id
+    JOIN warehouses w2 ON w2.id = t.destination_warehouse_id
+    JOIN users u ON u.id = t.created_by
+    ORDER BY t.created_at DESC
+  `);
+  
   return rows;
 };
 
-const findById = async (id) => {
+/**
+ * Get transfer header and its line items by ID
+ */
+const getTransferById = async (id) => {
   const pool = getPool();
-  const [[transfer]] = await pool.execute(
-    `SELECT ${TRANSFER_COLS}
-     FROM transfers t
-     JOIN warehouses sw ON t.source_warehouse_id      = sw.id
-     JOIN warehouses dw ON t.destination_warehouse_id = dw.id
-     LEFT JOIN users u ON t.created_by = u.id
-     WHERE t.id = ? LIMIT 1`,
-    [id]
-  );
-  if (!transfer) return null;
 
-  const [items] = await pool.execute(
-    `SELECT ti.id, ti.transfer_id, ti.product_id, ti.quantity,
-            p.name AS product_name, p.sku, p.unit
-     FROM transfer_items ti JOIN products p ON ti.product_id = p.id
-     WHERE ti.transfer_id = ?`,
-    [id]
-  );
+  const [headerRows] = await pool.execute(`
+    SELECT t.*, 
+           w1.name AS source_warehouse_name,
+           w2.name AS destination_warehouse_name,
+           u.name AS created_by_name
+    FROM transfers t
+    JOIN warehouses w1 ON w1.id = t.source_warehouse_id
+    JOIN warehouses w2 ON w2.id = t.destination_warehouse_id
+    JOIN users u ON u.id = t.created_by
+    WHERE t.id = ?
+  `, [id]);
 
-  const totalItems = items.length;
-  const totalQuantity = items.reduce((sum, i) => sum + Number(i.quantity), 0);
+  if (headerRows.length === 0) return null;
 
-  return { ...transfer, items, totalItems, totalQuantity };
+  const [items] = await pool.execute(`
+    SELECT ti.*, p.name AS product_name, p.sku
+    FROM transfer_items ti
+    JOIN products p ON p.id = ti.product_id
+    WHERE ti.transfer_id = ?
+  `, [id]);
+
+  return { ...headerRows[0], items };
 };
 
-const create = async ({ source_warehouse_id, destination_warehouse_id, notes = null, created_by, items }) => {
+/**
+ * Create a new transfer header and line items
+ */
+const createTransfer = async (data, items, user_id) => {
   const pool = getPool();
   const conn = await pool.getConnection();
+
   try {
     await conn.beginTransaction();
 
-    const [res] = await conn.execute(
-      `INSERT INTO transfers (source_warehouse_id, destination_warehouse_id, notes, created_by)
-       VALUES (?, ?, ?, ?)`,
-      [source_warehouse_id, destination_warehouse_id, notes, created_by]
-    );
-    const transferId = res.insertId;
+    // 1. Insert header
+    const [headerResult] = await conn.execute(`
+      INSERT INTO transfers (source_warehouse_id, destination_warehouse_id, status, notes, created_by)
+      VALUES (?, ?, 'draft', ?, ?)
+    `, [data.source_warehouse_id, data.destination_warehouse_id, data.notes || '', user_id]);
+    
+    const transferId = headerResult.insertId;
 
+    // 2. Insert items
     for (const item of items) {
-      await conn.execute(
-        `INSERT INTO transfer_items (transfer_id, product_id, quantity) VALUES (?, ?, ?)`,
-        [transferId, item.product_id, item.quantity]
-      );
+      await conn.execute(`
+        INSERT INTO transfer_items (transfer_id, product_id, quantity)
+        VALUES (?, ?, ?)
+      `, [transferId, item.product_id, item.quantity]);
     }
 
     await conn.commit();
-    return findById(transferId);
+    return await getTransferById(transferId);
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -84,20 +89,80 @@ const create = async ({ source_warehouse_id, destination_warehouse_id, notes = n
   }
 };
 
-/** Add items to a draft transfer */
-const addItems = async (transferId, items) => {
+/**
+ * Complete a transfer, mutating stock and recording ledger entries
+ */
+const completeTransfer = async (transferId, userId) => {
   const pool = getPool();
   const conn = await pool.getConnection();
+
   try {
     await conn.beginTransaction();
+
+    // 1. Get transfer
+    const [transfers] = await conn.execute('SELECT * FROM transfers WHERE id = ? FOR UPDATE', [transferId]);
+    if (transfers.length === 0) throw new AppError('Transfer not found', 404);
+    
+    const transfer = transfers[0];
+    if (transfer.status !== 'draft') throw new AppError(`Cannot complete transfer in status: ${transfer.status}`, 400);
+
+    const sourceId = transfer.source_warehouse_id;
+    const destId = transfer.destination_warehouse_id;
+
+    // 2. Get line items
+    const [items] = await conn.execute('SELECT * FROM transfer_items WHERE transfer_id = ?', [transferId]);
+    if (items.length === 0) throw new AppError('Transfer has no items', 400);
+
+    // 3. Loop through items to update stock
     for (const item of items) {
-      await conn.execute(
-        `INSERT INTO transfer_items (transfer_id, product_id, quantity) VALUES (?, ?, ?)`,
-        [transferId, item.product_id, item.quantity]
-      );
+      const pid = item.product_id;
+      const qty = item.quantity;
+
+      // Ensure source has enough quantity (guard check)
+      const [sourceStock] = await conn.execute(`
+        SELECT quantity FROM inventory_stock 
+        WHERE product_id = ? AND warehouse_id = ?
+        FOR UPDATE
+      `, [pid, sourceId]);
+
+      if (sourceStock.length === 0 || sourceStock[0].quantity < qty) {
+        throw new AppError(`Insufficient stock for Product ID ${pid} at source warehouse`, 400);
+      }
+
+      // Decrease source
+      await conn.execute(`
+        UPDATE inventory_stock
+        SET quantity = quantity - ?
+        WHERE product_id = ? AND warehouse_id = ?
+      `, [qty, pid, sourceId]);
+
+      // Increase destination
+      await conn.execute(`
+        INSERT INTO inventory_stock (product_id, warehouse_id, quantity)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE quantity = quantity + ?
+      `, [pid, destId, qty, qty]);
+
+      // Ledger entry 1: transfer_out
+      await conn.execute(`
+        INSERT INTO stock_ledger
+          (product_id, warehouse_id, operation_type, quantity_change, reference_id, reference_type, created_by)
+        VALUES (?, ?, 'transfer_out', ?, ?, 'transfer', ?)
+      `, [pid, sourceId, -qty, transferId, userId]);
+
+      // Ledger entry 2: transfer_in
+      await conn.execute(`
+        INSERT INTO stock_ledger
+          (product_id, warehouse_id, operation_type, quantity_change, reference_id, reference_type, created_by)
+        VALUES (?, ?, 'transfer_in', ?, ?, 'transfer', ?)
+      `, [pid, destId, qty, transferId, userId]);
     }
+
+    // 4. Update status
+    await conn.execute(`UPDATE transfers SET status = 'done' WHERE id = ?`, [transferId]);
+
     await conn.commit();
-    return findById(transferId);
+    return true; // We can return true, and controller calls alertCheck separately (or here)
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -106,110 +171,9 @@ const addItems = async (transferId, items) => {
   }
 };
 
-/** Update a transfer line item */
-const updateItem = async (itemId, { quantity }) => {
-  const pool = getPool();
-  if (quantity !== undefined) {
-    await pool.execute(`UPDATE transfer_items SET quantity = ? WHERE id = ?`, [quantity, itemId]);
-  }
+module.exports = {
+  getAllTransfers,
+  getTransferById,
+  createTransfer,
+  completeTransfer,
 };
-
-/** Remove a transfer line item */
-const removeItem = async (itemId) => {
-  const pool = getPool();
-  await pool.execute(`DELETE FROM transfer_items WHERE id = ?`, [itemId]);
-};
-
-/** Update transfer header while draft */
-const updateTransfer = async (id, { source_warehouse_id, destination_warehouse_id, notes }) => {
-  const pool = getPool();
-  const updates = [], values = [];
-  if (source_warehouse_id !== undefined)      { updates.push("source_warehouse_id = ?");      values.push(source_warehouse_id); }
-  if (destination_warehouse_id !== undefined)  { updates.push("destination_warehouse_id = ?"); values.push(destination_warehouse_id); }
-  if (notes !== undefined)                     { updates.push("notes = ?");                    values.push(notes); }
-  if (!updates.length) return findById(id);
-  values.push(id);
-  await pool.execute(`UPDATE transfers SET ${updates.join(", ")} WHERE id = ?`, values);
-  return findById(id);
-};
-
-const updateStatus = async (id, status, userId) => {
-  const pool = getPool();
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const transfer = await findById(id);
-    if (!transfer) throw new AppError("Transfer not found", 404);
-
-    // Validate transitions
-    const transitions = { draft: ["ready", "cancelled"], ready: ["done", "cancelled"], done: [], cancelled: [] };
-    if (!transitions[transfer.status]?.includes(status)) {
-      throw new AppError(`Cannot transition from '${transfer.status}' to '${status}'`, 422);
-    }
-
-    if (status === "done") {
-      // Pre-check stock in source warehouse
-      const insufficientItems = [];
-      for (const item of transfer.items) {
-        const stock = await stockModel.getStock(item.product_id, transfer.source_warehouse_id);
-        if (!stock || stock.quantity < item.quantity) {
-          insufficientItems.push({
-            product: item.product_name,
-            sku: item.sku,
-            available: stock?.quantity ?? 0,
-            required: item.quantity,
-          });
-        }
-      }
-      if (insufficientItems.length > 0) {
-        throw new AppError(
-          `Insufficient stock in source warehouse: ${insufficientItems.map(i => `${i.product} (need ${i.required}, have ${i.available})`).join("; ")}`,
-          422
-        );
-      }
-    }
-
-    await conn.execute(`UPDATE transfers SET status = ? WHERE id = ?`, [status, id]);
-
-    if (status === "done") {
-      for (const item of transfer.items) {
-        // Decrement source, increment destination
-        await stockModel.adjustStock(item.product_id, transfer.source_warehouse_id, -item.quantity);
-        await stockModel.adjustStock(item.product_id, transfer.destination_warehouse_id, item.quantity);
-
-        // Write two ledger entries: transfer_out and transfer_in
-        await conn.execute(
-          `INSERT INTO stock_ledger
-             (product_id, warehouse_id, operation_type, quantity_change, reference_id, reference_type, created_by)
-           VALUES (?, ?, 'transfer_out', ?, ?, 'transfer', ?),
-                  (?, ?, 'transfer_in',  ?, ?, 'transfer', ?)`,
-          [
-            item.product_id, transfer.source_warehouse_id,      -item.quantity, id, userId,
-            item.product_id, transfer.destination_warehouse_id,  item.quantity, id, userId,
-          ]
-        );
-      }
-    }
-
-    await conn.commit();
-
-    // After commit — check both warehouses for low stock alerts (non-blocking)
-    if (status === "done") {
-      const alertItems = transfer.items.flatMap(i => [
-        { product_id: i.product_id, warehouse_id: transfer.source_warehouse_id },
-        { product_id: i.product_id, warehouse_id: transfer.destination_warehouse_id },
-      ]);
-      alertService.checkMultiple(alertItems);
-    }
-
-    return findById(id);
-  } catch (err) {
-    await conn.rollback();
-    throw err;
-  } finally {
-    conn.release();
-  }
-};
-
-module.exports = { findAll, findById, create, addItems, updateItem, removeItem, updateTransfer, updateStatus };

@@ -1,87 +1,104 @@
 const asyncHandler = require("express-async-handler");
+const Joi = require("joi");
 const AppError = require("../utils/AppError");
 const { sendSuccess } = require("../utils/responseUtils");
-const model = require("../models/transferModel");
+const transferModel = require("../models/transferModel");
+// Placeholder for alertCheck if needed directly from controller
+// const { checkAlerts } = require("../services/alertCheck");
 
-/** GET /api/transfers?status=&warehouseId=&search= */
-exports.getAll = asyncHandler(async (req, res) => {
-  const { status, warehouseId, search } = req.query;
-  return sendSuccess(res, { transfers: await model.findAll({ status, warehouseId, search }) });
-});
+const schemas = {
+  createTransfer: Joi.object({
+    source_warehouse_id: Joi.number().integer().required(),
+    destination_warehouse_id: Joi.number().integer().invalid(Joi.ref("source_warehouse_id")).required().messages({
+      "any.invalid": "Source and destination warehouses cannot be the same.",
+    }),
+    notes: Joi.string().allow("", null).optional(),
+    items: Joi.array().items(
+      Joi.object({
+        product_id: Joi.number().integer().required(),
+        quantity: Joi.number().min(0.01).required(),
+      })
+    ).min(1).required(),
+  }),
 
-/** GET /api/transfers/:id */
-exports.getOne = asyncHandler(async (req, res) => {
-  const t = await model.findById(req.params.id);
-  if (!t) throw new AppError("Transfer not found", 404);
-  return sendSuccess(res, { transfer: t });
-});
+  updateStatus: Joi.object({
+    status: Joi.string().valid("done").required(),
+  }),
+};
 
-/** POST /api/transfers */
-exports.create = asyncHandler(async (req, res) => {
-  const { source_warehouse_id, destination_warehouse_id, notes, items } = req.body;
-  if (!source_warehouse_id || !destination_warehouse_id || !items?.length)
-    throw new AppError("source_warehouse_id, destination_warehouse_id and items are required", 422);
-  if (String(source_warehouse_id) === String(destination_warehouse_id))
-    throw new AppError("Source and destination warehouses must differ", 422);
-  for (const item of items) {
-    if (!item.product_id) throw new AppError("Each item must have a product_id", 422);
-    if (!item.quantity || item.quantity <= 0) throw new AppError("Each item quantity must be > 0", 422);
+const validateBody = (schema, body) => {
+  const { error, value } = schema.validate(body, { abortEarly: false, stripUnknown: true, convert: true });
+  if (error) {
+    const errors = error.details.reduce((acc, d) => {
+      acc[d.path.join(".")] = d.message.replace(/"/g, "");
+      return acc;
+    }, {});
+    throw Object.assign(new AppError("Validation failed", 422), { errors });
   }
-  const t = await model.create({ source_warehouse_id, destination_warehouse_id, notes, created_by: req.user.id, items });
-  return sendSuccess(res, { transfer: t }, "Transfer created", 201);
+  return value;
+};
+
+/**
+ * @desc    Get all transfers
+ * @route   GET /api/transfers
+ * @access  Private
+ */
+const getTransfers = asyncHandler(async (req, res) => {
+  const transfers = await transferModel.getAllTransfers();
+  return sendSuccess(res, transfers);
 });
 
-/** PUT /api/transfers/:id — update header (draft only) */
-exports.update = asyncHandler(async (req, res) => {
-  const t = await model.findById(req.params.id);
-  if (!t) throw new AppError("Transfer not found", 404);
-  if (t.status !== "draft") throw new AppError("Can only edit transfers in draft status", 422);
-  if (req.body.source_warehouse_id && req.body.destination_warehouse_id &&
-      String(req.body.source_warehouse_id) === String(req.body.destination_warehouse_id))
-    throw new AppError("Source and destination warehouses must differ", 422);
-  const updated = await model.updateTransfer(req.params.id, req.body);
-  return sendSuccess(res, { transfer: updated }, "Transfer updated");
+/**
+ * @desc    Get transfer by ID (header + items)
+ * @route   GET /api/transfers/:id
+ * @access  Private
+ */
+const getTransferDetails = asyncHandler(async (req, res) => {
+  const transfer = await transferModel.getTransferById(req.params.id);
+  if (!transfer) throw new AppError("Transfer not found", 404);
+  return sendSuccess(res, transfer);
 });
 
-/** PATCH /api/transfers/:id/status */
-exports.updateStatus = asyncHandler(async (req, res) => {
-  const { status } = req.body;
-  const valid = ["draft", "ready", "done", "cancelled"];
-  if (!valid.includes(status)) throw new AppError(`status must be one of: ${valid.join(", ")}`, 422);
-  const t = await model.updateStatus(req.params.id, status, req.user.id);
-  return sendSuccess(res, { transfer: t }, "Transfer status updated");
+/**
+ * @desc    Create a new transfer (draft)
+ * @route   POST /api/transfers
+ * @access  Private
+ */
+const createTransfer = asyncHandler(async (req, res) => {
+  const validData = validateBody(schemas.createTransfer, req.body);
+  const { items, ...headerData } = validData;
+
+  const transfer = await transferModel.createTransfer(headerData, items, req.user.id);
+  return sendSuccess(res, transfer, "Transfer created as draft", 201);
 });
 
-/** POST /api/transfers/:id/items — add items (draft only) */
-exports.addItems = asyncHandler(async (req, res) => {
-  const t = await model.findById(req.params.id);
-  if (!t) throw new AppError("Transfer not found", 404);
-  if (t.status !== "draft") throw new AppError("Can only add items to draft transfers", 422);
-  if (!req.body.items?.length) throw new AppError("items array is required", 422);
-  for (const item of req.body.items) {
-    if (!item.product_id) throw new AppError("Each item must have a product_id", 422);
-    if (!item.quantity || item.quantity <= 0) throw new AppError("Each item quantity must be > 0", 422);
+/**
+ * @desc    Update transfer status (draft -> done)
+ * @route   PUT /api/transfers/:id/status
+ * @access  Private
+ */
+const updateTransferStatus = asyncHandler(async (req, res) => {
+  const { status } = validateBody(schemas.updateStatus, req.body);
+
+  if (status === "done") {
+    await transferModel.completeTransfer(req.params.id, req.user.id);
+    
+    // We would call checkAlerts here for every item in the transfer to handle Low Stock notifications
+    // const transfer = await transferModel.getTransferById(req.params.id);
+    // for (const item of transfer.items) {
+    //   await checkAlerts(item.product_id, transfer.source_warehouse_id, db);
+    //   await checkAlerts(item.product_id, transfer.destination_warehouse_id, db);
+    // }
+
+    return sendSuccess(res, null, "Transfer completed successfully");
   }
-  const updated = await model.addItems(req.params.id, req.body.items);
-  return sendSuccess(res, { transfer: updated }, "Items added");
+
+  throw new AppError("Invalid status transition", 400);
 });
 
-/** PUT /api/transfers/:id/items/:itemId — update a line item (draft only) */
-exports.updateItem = asyncHandler(async (req, res) => {
-  const t = await model.findById(req.params.id);
-  if (!t) throw new AppError("Transfer not found", 404);
-  if (t.status !== "draft") throw new AppError("Can only edit items in draft transfers", 422);
-  await model.updateItem(req.params.itemId, req.body);
-  const updated = await model.findById(req.params.id);
-  return sendSuccess(res, { transfer: updated }, "Item updated");
-});
-
-/** DELETE /api/transfers/:id/items/:itemId — remove a line item (draft only) */
-exports.removeItem = asyncHandler(async (req, res) => {
-  const t = await model.findById(req.params.id);
-  if (!t) throw new AppError("Transfer not found", 404);
-  if (t.status !== "draft") throw new AppError("Can only remove items from draft transfers", 422);
-  await model.removeItem(req.params.itemId);
-  const updated = await model.findById(req.params.id);
-  return sendSuccess(res, { transfer: updated }, "Item removed");
-});
+module.exports = {
+  getTransfers,
+  getTransferDetails,
+  createTransfer,
+  updateTransferStatus,
+};
