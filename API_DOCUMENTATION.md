@@ -14,6 +14,8 @@
 - [Error Codes](#error-codes)
 - [Rate Limiting](#rate-limiting)
 - [Endpoints](#endpoints)
+- [Reports & Analytics](#reports--analytics----apireports)
+
 
 ---
 
@@ -489,6 +491,204 @@ Each user sees only their own notifications.
 { "id": 1, "user_id": 1, "alert_id": 3, "alert_type": "low_stock",
   "title": "Low Stock Alert", "message": "Widget A is running low",
   "is_read": 0, "created_at": "..." }
+```
+
+---
+
+## Reports & Analytics — `/api/reports`
+
+> 🔑 **Inventory Manager only** — all report endpoints require a valid JWT with the `inventory_manager` role.
+
+### `GET /api/reports/inventory-valuation`
+
+Current stock value based on the latest receipt unit price per product.
+
+**Query params:** `?warehouseId=&categoryId=`
+
+**Response:**
+```json
+{
+  "data": {
+    "items": [
+      {
+        "product_id": 5,
+        "product_name": "Widget A",
+        "sku": "WGT-001",
+        "unit": "pcs",
+        "category_name": "Electronics",
+        "warehouse_id": 1,
+        "warehouse_name": "Main Warehouse",
+        "quantity": 120,
+        "unit_price": 29.99,
+        "total_value": 3598.80
+      }
+    ],
+    "grandTotal": 3598.80
+  }
+}
+```
+
+> **Underlying query:** Joins `inventory_stock` → `products` → `categories` → `warehouses` → latest `receipt_items` price subquery. Only rows with `quantity > 0` are returned. Results ordered by `total_value DESC`.
+
+---
+
+### `GET /api/reports/stock-movement-trends`
+
+Daily stock quantity changes grouped by operation type, useful for trend charts.
+
+**Query params:** `?days=30&warehouseId=`
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `days` | `30` | Look-back window in days |
+| `warehouseId` | — | Filter to a single warehouse |
+
+**Response:**
+```json
+{
+  "data": {
+    "trends": [
+      {
+        "date": "2026-03-10",
+        "operation_type": "receipt",
+        "net_change": 250,
+        "transaction_count": 3
+      },
+      {
+        "date": "2026-03-10",
+        "operation_type": "delivery",
+        "net_change": -80,
+        "transaction_count": 2
+      }
+    ]
+  }
+}
+```
+
+> **Underlying query:** `SELECT DATE(created_at), operation_type, SUM(quantity_change), COUNT(*) FROM stock_ledger GROUP BY DATE(created_at), operation_type ORDER BY DATE(created_at)`
+
+---
+
+### `GET /api/reports/top-products`
+
+Most-moved products by outgoing delivery volume.
+
+**Query params:** `?limit=10&days=30&warehouseId=`
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `limit` | `10` | Number of top products to return |
+| `days` | `30` | Look-back window in days |
+| `warehouseId` | — | Filter to a single warehouse |
+
+**Response:**
+```json
+{
+  "data": {
+    "products": [
+      {
+        "product_id": 5,
+        "product_name": "Widget A",
+        "sku": "WGT-001",
+        "unit": "pcs",
+        "category_name": "Electronics",
+        "total_moved": 540,
+        "delivery_count": 12
+      }
+    ]
+  }
+}
+```
+
+> **Underlying query:** `SELECT p.name, SUM(ABS(sl.quantity_change)) AS total_moved, COUNT(*) FROM stock_ledger sl JOIN products p WHERE sl.operation_type = 'delivery' GROUP BY p.id ORDER BY total_moved DESC LIMIT ?`
+
+---
+
+### `GET /api/reports/warehouse-utilisation`
+
+Stock used vs available capacity per warehouse.
+
+**Response:**
+```json
+{
+  "data": {
+    "warehouses": [
+      {
+        "warehouse_id": 1,
+        "warehouse_name": "Main Warehouse",
+        "location": "Bangalore",
+        "capacity": 5000,
+        "used": 3200,
+        "free": 1800,
+        "utilisation_percent": 64.0
+      }
+    ]
+  }
+}
+```
+
+> **Underlying query:** `SELECT w.name, w.capacity, SUM(i.quantity) AS used, GREATEST(w.capacity - SUM(i.quantity), 0) AS free, ROUND(SUM(i.quantity)/w.capacity*100,1) AS utilisation_percent FROM warehouses w LEFT JOIN inventory_stock i GROUP BY w.id ORDER BY utilisation_percent DESC`
+
+---
+
+### `GET /api/reports/charts/monthly-stock-flow`
+
+Monthly aggregated stock in / out / net for line/bar charts.
+
+**Query params:** `?months=6&warehouseId=`
+
+**Response:**
+```json
+{
+  "data": {
+    "months": [
+      { "month": "2025-10", "total_in": 1200, "total_out": 800, "net_change": 400 }
+    ]
+  }
+}
+```
+
+---
+
+### `GET /api/reports/charts/category-distribution`
+
+Total stock quantity per category for pie/donut charts.
+
+**Query params:** `?warehouseId=`
+
+**Response:**
+```json
+{
+  "data": {
+    "categories": [
+      { "category_id": 2, "category_name": "Electronics", "product_count": 8, "total_quantity": 960 }
+    ]
+  }
+}
+```
+
+---
+
+### `GET /api/reports/charts/warehouse-usage`
+
+Per-warehouse product count, quantity, capacity, and utilisation % for graphs.
+
+**Response:**
+```json
+{
+  "data": {
+    "warehouses": [
+      {
+        "warehouse_id": 1,
+        "warehouse_name": "Main Warehouse",
+        "product_count": 15,
+        "total_quantity": 3200,
+        "capacity": 5000,
+        "utilisation_percent": 64.0
+      }
+    ]
+  }
+}
 ```
 
 ---
