@@ -63,7 +63,18 @@ const runE2E = async () => {
     const prodRes = await _fetch("/products", "POST", { name: `Product_${ts}`, sku: `SKU_${ts}`, category_id: catId, unit: "pcs", reorder_level: 10 }, MANAGER_TOKEN);
     const prodId = prodRes.data.product.id;
     const prodQR = prodRes.data.product.qr_code;
-    console.log("   ✅ Products and Warehouses created");
+    
+    // Verify Module 19, Step 3: Auto-seed 0 quantity across all warehouses
+    const stockCheck = await _fetch(`/products/${prodId}/stock`, "GET", null, MANAGER_TOKEN);
+    if (stockCheck.data.stockByWarehouse.length < 2) throw new Error("Product was not seeded to both warehouses");
+    
+    const w1Stock = stockCheck.data.stockByWarehouse.find(w => w.warehouse_id === w1);
+    const w2Stock = stockCheck.data.stockByWarehouse.find(w => w.warehouse_id === w2);
+    if (!w1Stock || !w2Stock || Number(w1Stock.quantity) !== 0 || Number(w2Stock.quantity) !== 0) {
+      throw new Error(`Initial warehouse seed did not default to 0 for w1/w2. W1: ${w1Stock?.quantity}, W2: ${w2Stock?.quantity}`);
+    }
+
+    console.log("   ✅ Products, Warehouses, and Workflow Step 3 auto-stock verified");
 
     // ──────────────────────────────────────────────────────────
     // Modules 6 & 7: Core Operations (Receipts)

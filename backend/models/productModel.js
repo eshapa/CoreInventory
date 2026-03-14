@@ -87,7 +87,10 @@ const create = async ({ name, sku, category_id = null, description = null, unit 
   try {
     await conn.beginTransaction();
 
-    // 1. Insert the product
+    // 1. Fetch available warehouses BEFORE starting the transaction
+    const [warehouses] = await conn.execute(`SELECT id FROM warehouses`);
+
+    // 2. Insert the product
     const [result] = await conn.execute(
       `INSERT INTO products (name, sku, category_id, description, unit, reorder_level, qr_code)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -95,7 +98,16 @@ const create = async ({ name, sku, category_id = null, description = null, unit 
     );
     const productId = result.insertId;
 
-    // 2. If initial stock is provided, seed inventory + ledger
+    // 3. Step 3 (System Workflow): Automatically seed an explicit 0-quantity
+    // inventory_stock row for ALL warehouses available in the system.
+    for (const w of warehouses) {
+      await conn.execute(
+        `INSERT IGNORE INTO inventory_stock (product_id, warehouse_id, quantity) VALUES (?, ?, 0)`,
+        [productId, w.id]
+      );
+    }
+
+    // 4. If initial stock is provided, seed inventory + ledger
     if (initial_stock && initial_stock > 0 && warehouse_id) {
       await conn.execute(
         `INSERT INTO inventory_stock (product_id, warehouse_id, quantity)
