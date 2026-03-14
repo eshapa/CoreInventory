@@ -9,6 +9,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import DashboardLayout from "./components/DashboardLayout";
 
 // Pages
+import RegisterPage from "./pages/Register"; // Make sure the filename matches your actual file
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import ProductsPage from "./pages/ProductsPage";
@@ -27,15 +28,16 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-
         <Toaster />
         <Sonner />
 
         <BrowserRouter>
           <Routes>
-
+            {/* Auth Routes */}
             <Route path="/" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
 
+            {/* App Routes (Wrapped in Dashboard Layout) */}
             <Route element={<DashboardLayout />}>
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/products" element={<ProductsPage />} />
@@ -48,11 +50,10 @@ function App() {
               <Route path="/profile" element={<ProfilePage />} />
             </Route>
 
+            {/* Fallback Route */}
             <Route path="*" element={<NotFound />} />
-
           </Routes>
         </BrowserRouter>
-
       </TooltipProvider>
     </QueryClientProvider>
   );
