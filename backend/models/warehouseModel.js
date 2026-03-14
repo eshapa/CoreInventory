@@ -1,9 +1,14 @@
 const { getPool } = require("../config/db");
 
+const COLS = `
+  w.id, w.name, w.location, w.capacity, w.created_at,
+  (w.capacity - COALESCE(SUM(i.quantity), 0)) AS available_space
+`;
+
 const findAll = async () => {
   const pool = getPool();
   const [rows] = await pool.execute(
-    `SELECT id, name, location, capacity, created_at FROM warehouses ORDER BY id`
+    `SELECT ${COLS} FROM warehouses w LEFT JOIN inventory_stock i ON w.id = i.warehouse_id GROUP BY w.id ORDER BY w.id`
   );
   return rows;
 };
@@ -11,7 +16,7 @@ const findAll = async () => {
 const findById = async (id) => {
   const pool = getPool();
   const [rows] = await pool.execute(
-    `SELECT id, name, location, capacity, created_at FROM warehouses WHERE id = ? LIMIT 1`,
+    `SELECT ${COLS} FROM warehouses w LEFT JOIN inventory_stock i ON w.id = i.warehouse_id WHERE w.id = ? GROUP BY w.id LIMIT 1`,
     [id]
   );
   return rows[0] || null;
@@ -40,7 +45,31 @@ const update = async (id, { name, location, capacity }) => {
 
 const remove = async (id) => {
   const pool = getPool();
+  // Check if warehouse has stock before deleting
+  const [stock] = await pool.execute(
+    `SELECT COUNT(*) as count FROM inventory_stock WHERE warehouse_id = ? AND quantity > 0`,
+    [id]
+  );
+  if (stock[0].count > 0) {
+    const error = new Error("Cannot delete warehouse because it still contains stock.");
+    error.status = 409;
+    throw error;
+  }
+  
   await pool.execute(`DELETE FROM warehouses WHERE id = ?`, [id]);
 };
 
-module.exports = { findAll, findById, create, update, remove };
+const findInventoryByWarehouse = async (warehouseId) => {
+  const pool = getPool();
+  const [rows] = await pool.execute(
+    `SELECT p.name, p.sku, i.quantity 
+     FROM inventory_stock i 
+     JOIN products p ON p.id = i.product_id 
+     WHERE i.warehouse_id = ? AND i.quantity > 0
+     ORDER BY p.name`,
+    [warehouseId]
+  );
+  return rows;
+};
+
+module.exports = { findAll, findById, create, update, remove, findInventoryByWarehouse };

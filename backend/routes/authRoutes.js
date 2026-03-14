@@ -8,6 +8,7 @@ const {
   login,
   getMe,
   updateMe,
+  changePassword,
   forgotPassword,
   verifyResetOTP,
   resetPassword,
@@ -38,8 +39,9 @@ router.post("/reset-password",  resetLimiter, resetPassword);
    PROTECTED ROUTES (require valid JWT)
 ────────────────────────────────────────────── */
 
-router.get ("/me",     protect, getMe);
-router.put ("/me",     protect, updateMe);
-router.post("/logout", protect, logout);
+router.get ("/me",                 protect, getMe);
+router.put ("/me",                 protect, updateMe);
+router.put ("/me/change-password", protect, changePassword);
+router.post("/logout",             protect, logout);
 
 module.exports = router;

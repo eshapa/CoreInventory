@@ -20,6 +20,8 @@ const connectDB = async () => {
       connectTimeout: 10000,      // 10 s
       queueLimit: 0,
       timezone: "+00:00",
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 0,
     });
 
     // Validate connectivity on startup
