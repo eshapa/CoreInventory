@@ -154,7 +154,15 @@ const runE2E = async () => {
     await _fetch("/auth/login", "POST", { email: staffEmail, password: "NewPassword123!" });
     console.log("   ✅ Unread Notifications Badge & Password Change validated");
 
-    console.log("\n🎉 ALL 17 MODULES PASSED END-TO-END AUTOMATED TESTING SUCCESSFULLY!\n");
+    // ──────────────────────────────────────────────────────────
+    // Module 18: QR Scanner (Shubham's Branch)
+    console.log("⏳ [Mod 18] Testing Shubham's QR Module...");
+    const qrScanRes = await _fetch("/qr/scan", "POST", { qr_code: prodQR }, STAFF_TOKEN);
+    if (qrScanRes.data.product.sku !== `SKU_${ts}`) throw new Error("QR Scan failed to return correct product SKU");
+    if (typeof qrScanRes.data.is_low_stock !== "boolean") throw new Error("QR Scan missing low stock aggregation");
+    console.log("   ✅ Shubham's QR module integrated perfectly");
+
+    console.log("\n🎉 ALL 18 MODULES PASSED END-TO-END AUTOMATED TESTING SUCCESSFULLY!\n");
     process.exit(0);
 
   } catch (error) {
