@@ -1,15 +1,15 @@
 const express = require("express");
-const cors = require("cors");
-const helmet = require("helmet");
-const morgan = require("morgan");
-const dotenv = require("dotenv");
+const cors    = require("cors");
+const helmet  = require("helmet");
+const morgan  = require("morgan");
+const dotenv  = require("dotenv");
 
-// Load env first — before any other imports that read process.env
+// Load env first
 dotenv.config();
 
 const { connectDB } = require("./config/db");
-const initDb = require("./config/initDb");
-const AppError = require("./utils/AppError");
+const initDb        = require("./config/initDb");
+const AppError      = require("./utils/AppError");
 const { sendError } = require("./utils/responseUtils");
 
 const app = express();
@@ -17,37 +17,54 @@ const app = express();
 /* ═══════════════════════════════════════════
    SECURITY MIDDLEWARE
 ═══════════════════════════════════════════ */
-app.use(
-  helmet({
-    contentSecurityPolicy: process.env.NODE_ENV === "production",
-    crossOriginEmbedderPolicy: false,
-  })
-);
+app.use(helmet({
+  contentSecurityPolicy: process.env.NODE_ENV === "production",
+  crossOriginEmbedderPolicy: false,
+}));
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors({
+  origin: process.env.CLIENT_URL || "http://localhost:5173",
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 /* ═══════════════════════════════════════════
    GENERAL MIDDLEWARE
 ═══════════════════════════════════════════ */
-app.use(express.json({ limit: "10kb" }));          // prevent large body DoS
+app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-
-// Trust first proxy (needed for rate-limit IP detection on platforms like Railway / Render)
 app.set("trust proxy", 1);
 
 /* ═══════════════════════════════════════════
    ROUTES
 ═══════════════════════════════════════════ */
-app.use("/api/auth",  require("./routes/authRoutes"));
-app.use("/api/users", require("./routes/userRoutes"));
+
+// Auth & Users
+app.use("/api/auth",               require("./routes/authRoutes"));
+app.use("/api/users",              require("./routes/userRoutes"));
+app.use("/api/roles",              require("./routes/roleRoutes"));
+
+// Core domain
+app.use("/api/warehouses",         require("./routes/warehouseRoutes"));
+app.use("/api/categories",         require("./routes/categoryRoutes"));
+app.use("/api/products",           require("./routes/productRoutes"));
+app.use("/api/suppliers",          require("./routes/supplierRoutes"));
+app.use("/api/customers",          require("./routes/customerRoutes"));
+
+// Inventory
+app.use("/api/inventory",          require("./routes/inventoryRoutes"));
+
+// Transactions
+app.use("/api/receipts",           require("./routes/receiptRoutes"));
+app.use("/api/deliveries",         require("./routes/deliveryRoutes"));
+app.use("/api/transfers",          require("./routes/transferRoutes"));
+app.use("/api/stock-adjustments",  require("./routes/stockAdjustmentRoutes"));
+
+// Alerts & Notifications
+app.use("/api/alerts",             require("./routes/alertRoutes"));
+app.use("/api/notifications",      require("./routes/notificationRoutes"));
 
 /* ═══════════════════════════════════════════
    HEALTH CHECK
@@ -73,20 +90,16 @@ app.use((req, res) => {
 ═══════════════════════════════════════════ */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  // Expose validation errors if present
   if (err.errors) {
     return res.status(err.statusCode || 422).json({
       success: false,
       message: err.message,
-      errors: err.errors,
+      errors:  err.errors,
     });
   }
-
   if (err.isOperational) {
     return sendError(res, err.message, err.statusCode);
   }
-
-  // Unexpected / programming errors — don't leak details in production
   console.error("💥 UNHANDLED ERROR:", err);
   return sendError(
     res,
@@ -102,8 +115,8 @@ const PORT = process.env.PORT || 5000;
 
 const start = async () => {
   try {
-    await connectDB();   // Connect pool
-    await initDb();      // Create tables if needed
+    await connectDB();
+    await initDb();
     app.listen(PORT, () =>
       console.log(`🚀 Server running on port ${PORT} [${process.env.NODE_ENV || "development"}]`)
     );
@@ -114,5 +127,4 @@ const start = async () => {
 };
 
 start();
-
 module.exports = app;

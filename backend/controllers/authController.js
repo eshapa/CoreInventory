@@ -6,43 +6,41 @@ const { generateAccessToken, generatePurposeToken, verifyAccessToken } = require
 const { generateOTP, getOTPExpiry } = require("../utils/otpUtils");
 const { sendVerificationEmail, sendPasswordResetEmail } = require("../utils/emailUtils");
 const userModel = require("../models/userModel");
-const otpModel = require("../models/otpModel");
+const roleModel = require("../models/roleModel");
+const otpModel  = require("../models/otpModel");
 
 /* ═══════════════════════════════════════════════
    VALIDATION SCHEMAS
    ═══════════════════════════════════════════════ */
 
-const ROLES = ["inventory_manager", "warehouse_staff"];
+const ROLE_NAMES = ["inventory_manager", "warehouse_staff"];
 
 const schemas = {
   register: Joi.object({
-    name: Joi.string().trim().min(2).max(100).required(),
-    email: Joi.string().email().lowercase().trim().required(),
+    name:     Joi.string().trim().min(2).max(100).required(),
+    email:    Joi.string().email().lowercase().trim().required(),
+    phone:    Joi.string().trim().max(20).optional().allow("", null),
     password: Joi.string()
-      .min(8)
-      .max(72)
+      .min(8).max(72)
       .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/)
       .required()
-      .messages({
-        "string.pattern.base":
-          "Password must contain uppercase, lowercase, number and special character.",
-      }),
-    role: Joi.string().valid(...ROLES).required(),
+      .messages({ "string.pattern.base": "Password must contain uppercase, lowercase, number and special character." }),
+    role: Joi.string().valid(...ROLE_NAMES).required(),
   }),
 
   login: Joi.object({
-    email: Joi.string().email().lowercase().trim().required(),
+    email:    Joi.string().email().lowercase().trim().required(),
     password: Joi.string().required(),
   }),
 
   verifyEmail: Joi.object({
     email: Joi.string().email().lowercase().trim().required(),
-    otp: Joi.string().length(6).pattern(/^\d+$/).required(),
+    otp:   Joi.string().length(6).pattern(/^\d+$/).required(),
   }),
 
   resendOTP: Joi.object({
     email: Joi.string().email().lowercase().trim().required(),
-    type: Joi.string().valid("EMAIL_VERIFY", "PASSWORD_RESET").required(),
+    type:  Joi.string().valid("EMAIL_VERIFY", "PASSWORD_RESET").required(),
   }),
 
   forgotPassword: Joi.object({
@@ -51,32 +49,28 @@ const schemas = {
 
   verifyResetOTP: Joi.object({
     email: Joi.string().email().lowercase().trim().required(),
-    otp: Joi.string().length(6).pattern(/^\d+$/).required(),
+    otp:   Joi.string().length(6).pattern(/^\d+$/).required(),
   }),
 
   resetPassword: Joi.object({
-    resetToken: Joi.string().required(),
+    resetToken:  Joi.string().required(),
     newPassword: Joi.string()
-      .min(8)
-      .max(72)
+      .min(8).max(72)
       .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/)
       .required()
-      .messages({
-        "string.pattern.base":
-          "Password must contain uppercase, lowercase, number and special character.",
-      }),
+      .messages({ "string.pattern.base": "Password must contain uppercase, lowercase, number and special character." }),
   }),
 
   updateProfile: Joi.object({
-    name: Joi.string().trim().min(2).max(100).required(),
-  }),
+    name:  Joi.string().trim().min(2).max(100).optional(),
+    phone: Joi.string().trim().max(20).optional().allow("", null),
+  }).min(1),
 };
 
 /* ═══════════════════════════════════════════════
    HELPERS
    ═══════════════════════════════════════════════ */
 
-/** Validate req.body inline and throw 422 on failure */
 const validateBody = (schema, body) => {
   const { error, value } = schema.validate(body, {
     abortEarly: false,
@@ -93,14 +87,15 @@ const validateBody = (schema, body) => {
   return value;
 };
 
-/** Safe user object — strips internal fields */
+/** Safe public user object — never exposes password_hash */
 const safeUser = (user) => ({
-  id: user.id,
-  name: user.name,
-  email: user.email,
-  role: user.role,
-  isEmailVerified: Boolean(user.is_email_verified),
-  isActive: Boolean(user.is_active),
+  id:        user.id,
+  name:      user.name,
+  email:     user.email,
+  phone:     user.phone   || null,
+  role_id:   user.role_id,
+  role:      user.role_name,           // resolved via JOIN
+  status:    user.status,
   createdAt: user.created_at,
 });
 
@@ -114,14 +109,18 @@ const safeUser = (user) => ({
  * @access  Public
  */
 const register = asyncHandler(async (req, res) => {
-  const { name, email, password, role } = validateBody(schemas.register, req.body);
+  const { name, email, phone, password, role } = validateBody(schemas.register, req.body);
 
-  // Duplicate check
+  // Check duplicate e-mail
   const existing = await userModel.findByEmail(email);
   if (existing) throw new AppError("An account with this email already exists", 409);
 
-  // Create user
-  const user = await userModel.createUser({ name, email, password, role });
+  // Resolve role name → role_id
+  const roleRecord = await roleModel.findByName(role);
+  if (!roleRecord) throw new AppError(`Role '${role}' not found`, 400);
+
+  // Create user (status = 'inactive' until email verified)
+  const user = await userModel.createUser({ name, email, phone, password, role_id: roleRecord.id });
 
   // Send verification OTP
   const otp = generateOTP();
@@ -147,26 +146,26 @@ const verifyEmail = asyncHandler(async (req, res) => {
   const user = await userModel.findByEmail(email);
   if (!user) throw new AppError("No account found with this email", 404);
 
-  if (user.is_email_verified) {
+  if (user.status === "active") {
     return sendSuccess(res, null, "Email is already verified. Please log in.");
   }
 
   const verified = await otpModel.validateAndConsumeOtp(user.id, otp, "EMAIL_VERIFY");
   if (!verified) throw new AppError("Invalid or expired OTP", 400);
 
-  await userModel.setEmailVerified(user.id);
+  await userModel.activateUser(user.id);
 
-  const accessToken = generateAccessToken({ id: user.id, role: user.role });
+  const accessToken = generateAccessToken({ id: user.id, role_id: user.role_id, role: user.role_name });
 
   return sendSuccess(
     res,
-    { user: { ...safeUser(user), isEmailVerified: true }, accessToken },
+    { user: { ...safeUser(user), status: "active" }, accessToken },
     "Email verified successfully. You are now logged in."
   );
 });
 
 /**
- * @desc    Resend OTP (verification or password reset)
+ * @desc    Resend OTP
  * @route   POST /api/auth/resend-otp
  * @access  Public
  */
@@ -174,12 +173,11 @@ const resendOTP = asyncHandler(async (req, res) => {
   const { email, type } = validateBody(schemas.resendOTP, req.body);
 
   const user = await userModel.findByEmail(email);
-  // Always respond the same way to prevent user enumeration
-  if (!user || !user.is_active) {
+  if (!user) {
     return sendSuccess(res, null, "If this account exists, a new OTP has been sent.");
   }
 
-  if (type === "EMAIL_VERIFY" && user.is_email_verified) {
+  if (type === "EMAIL_VERIFY" && user.status === "active") {
     throw new AppError("Email is already verified", 400);
   }
 
@@ -196,38 +194,32 @@ const resendOTP = asyncHandler(async (req, res) => {
 });
 
 /**
- * @desc    Login with email and password
+ * @desc    Login
  * @route   POST /api/auth/login
  * @access  Public
  */
 const login = asyncHandler(async (req, res) => {
   const { email, password } = validateBody(schemas.login, req.body);
 
-  // Fetch with password_hash
   const user = await userModel.findByEmail(email, true);
 
-  // Generic message to prevent user enumeration
-  if (!user || !user.is_active) {
-    throw new AppError("Invalid email or password", 401);
-  }
+  if (!user) throw new AppError("Invalid email or password", 401);
 
   const isMatch = await userModel.verifyPassword(password, user.password_hash);
   if (!isMatch) throw new AppError("Invalid email or password", 401);
 
-  if (!user.is_email_verified) {
+  if (user.status !== "active") {
     throw new AppError(
-      "Please verify your email address before logging in.",
+      user.status === "inactive"
+        ? "Please verify your email address before logging in."
+        : "Your account has been deactivated. Contact support.",
       403
     );
   }
 
-  const accessToken = generateAccessToken({ id: user.id, role: user.role });
+  const accessToken = generateAccessToken({ id: user.id, role_id: user.role_id, role: user.role_name });
 
-  return sendSuccess(
-    res,
-    { user: safeUser(user), accessToken },
-    "Login successful"
-  );
+  return sendSuccess(res, { user: safeUser(user), accessToken }, "Login successful");
 });
 
 /**
@@ -242,42 +234,36 @@ const getMe = asyncHandler(async (req, res) => {
 });
 
 /**
- * @desc    Update own profile
+ * @desc    Update own profile (name, phone)
  * @route   PUT /api/auth/me
  * @access  Private
  */
 const updateMe = asyncHandler(async (req, res) => {
-  const { name } = validateBody(schemas.updateProfile, req.body);
-  const updated = await userModel.updateUser(req.user.id, { name });
+  const fields = validateBody(schemas.updateProfile, req.body);
+  const updated = await userModel.updateUser(req.user.id, fields);
   return sendSuccess(res, { user: safeUser(updated) }, "Profile updated successfully");
 });
 
 /**
- * @desc    Initiate password reset — send OTP email
+ * @desc    Initiate password reset
  * @route   POST /api/auth/forgot-password
  * @access  Public
  */
 const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = validateBody(schemas.forgotPassword, req.body);
-
   const user = await userModel.findByEmail(email);
 
-  // Always return same response — prevents user enumeration
-  if (user && user.is_active && user.is_email_verified) {
+  if (user && user.status === "active") {
     const otp = generateOTP();
     await otpModel.createOtp(user.id, otp, "PASSWORD_RESET", getOTPExpiry(10));
     await sendPasswordResetEmail(email, otp, user.name);
   }
 
-  return sendSuccess(
-    res,
-    null,
-    "If an account with that email exists, a reset code has been sent."
-  );
+  return sendSuccess(res, null, "If an account with that email exists, a reset code has been sent.");
 });
 
 /**
- * @desc    Verify password-reset OTP — returns a short-lived reset token
+ * @desc    Verify password-reset OTP → issue reset token
  * @route   POST /api/auth/verify-reset-otp
  * @access  Public
  */
@@ -290,28 +276,19 @@ const verifyResetOTP = asyncHandler(async (req, res) => {
   const verified = await otpModel.validateAndConsumeOtp(user.id, otp, "PASSWORD_RESET");
   if (!verified) throw new AppError("Invalid or expired OTP", 400);
 
-  // Issue short-lived purpose token (15 min) so the reset step is separate
-  const resetToken = generatePurposeToken(
-    { id: user.id, purpose: "password_reset" },
-    "15m"
-  );
+  const resetToken = generatePurposeToken({ id: user.id, purpose: "password_reset" }, "15m");
 
-  return sendSuccess(
-    res,
-    { resetToken },
-    "OTP verified. Use the resetToken to set your new password."
-  );
+  return sendSuccess(res, { resetToken }, "OTP verified. Use the resetToken to set your new password.");
 });
 
 /**
- * @desc    Reset password using the purpose token from verifyResetOTP
+ * @desc    Reset password using purpose token
  * @route   POST /api/auth/reset-password
  * @access  Public
  */
 const resetPassword = asyncHandler(async (req, res) => {
   const { resetToken, newPassword } = validateBody(schemas.resetPassword, req.body);
 
-  // Decode & verify the purpose token
   let decoded;
   try {
     decoded = verifyAccessToken(resetToken);
@@ -319,40 +296,29 @@ const resetPassword = asyncHandler(async (req, res) => {
     throw new AppError("Invalid or expired reset token", 400);
   }
 
-  if (decoded.purpose !== "password_reset") {
-    throw new AppError("Invalid reset token", 400);
-  }
+  if (decoded.purpose !== "password_reset") throw new AppError("Invalid reset token", 400);
 
   const user = await userModel.findById(decoded.id);
-  if (!user || !user.is_active) throw new AppError("User not found", 404);
+  if (!user || user.status !== "active") throw new AppError("User not found", 404);
 
   await userModel.updatePassword(user.id, newPassword);
-  // Clean up any remaining OTPs
   await otpModel.deleteOtpsByUser(user.id, "PASSWORD_RESET");
 
   return sendSuccess(res, null, "Password reset successful. Please log in with your new password.");
 });
 
 /**
- * @desc    Logout (stateless — client discards token; server responds 200)
+ * @desc    Logout (stateless)
  * @route   POST /api/auth/logout
  * @access  Private
  */
 const logout = asyncHandler(async (req, res) => {
-  // For stateless JWT, logout is handled client-side.
-  // If you add refresh tokens / token blacklist, revoke here.
   return sendSuccess(res, null, "Logged out successfully");
 });
 
 module.exports = {
-  register,
-  verifyEmail,
-  resendOTP,
-  login,
-  getMe,
-  updateMe,
-  forgotPassword,
-  verifyResetOTP,
-  resetPassword,
+  register, verifyEmail, resendOTP, login,
+  getMe, updateMe,
+  forgotPassword, verifyResetOTP, resetPassword,
   logout,
 };

@@ -1,4 +1,5 @@
 const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const { sendError } = require("../utils/responseUtils");
 
 /**
@@ -15,8 +16,11 @@ const createLimiter = (max, windowMs, message) =>
     legacyHeaders: false,
     skipSuccessfulRequests: false,
     handler: (req, res) => sendError(res, message, 429),
-    keyGenerator: (req) =>
-      req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.ip,
+    keyGenerator: (req) => {
+      // Use X-Forwarded-For when behind a proxy, normalised for IPv6
+      const forwarded = req.headers["x-forwarded-for"]?.split(",")[0].trim();
+      return forwarded ?? ipKeyGenerator(req);
+    },
   });
 
 /**

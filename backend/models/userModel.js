@@ -3,39 +3,49 @@ const bcrypt = require("bcryptjs");
 
 const BCRYPT_ROUNDS = 12;
 
+/* ─── SQL helpers ──────────────────────────────────────────── */
+
+/** Columns returned for every public query (JOIN on roles) */
+const PUBLIC_COLS = `
+  u.id, u.name, u.email, u.phone,
+  u.role_id, r.name AS role_name,
+  u.status, u.created_at, u.updated_at`;
+
+const BASE_JOIN = `FROM users u JOIN roles r ON u.role_id = r.id`;
+
+/* ─── Model functions ──────────────────────────────────────── */
+
 /**
- * Create a new user in the database.
- * Password is bcrypt-hashed here so the controller stays lean.
+ * Create a new user. Password is hashed here.
+ * New accounts start as 'inactive' until email is verified.
  *
- * @param {{ name: string, email: string, password: string, role: string }} data
- * @returns {Promise<{ id: number, name: string, email: string, role: string }>}
+ * @param {{ name, email, password, role_id, phone? }} data
+ * @returns {Promise<object>} Created user (safe shape, no password_hash)
  */
-const createUser = async ({ name, email, password, role }) => {
+const createUser = async ({ name, email, password, role_id, phone = null }) => {
   const pool = getPool();
   const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
   const [result] = await pool.execute(
-    `INSERT INTO users (name, email, password_hash, role)
-     VALUES (?, ?, ?, ?)`,
-    [name, email.toLowerCase().trim(), password_hash, role]
+    `INSERT INTO users (name, email, password_hash, role_id, phone, status)
+     VALUES (?, ?, ?, ?, ?, 'inactive')`,
+    [name, email.toLowerCase().trim(), password_hash, role_id, phone]
   );
 
   return findById(result.insertId);
 };
 
 /**
- * Find a user by email address.
- * @param {string} email
- * @param {boolean} [withPassword=false]  Include password_hash in result
+ * Find a user by email, optionally include password_hash.
+ * Always JOINs roles table.
  */
 const findByEmail = async (email, withPassword = false) => {
   const pool = getPool();
-  const columns = withPassword
-    ? "id, name, email, password_hash, role, is_active, is_email_verified, created_at, updated_at"
-    : "id, name, email, role, is_active, is_email_verified, created_at, updated_at";
+  const extra = withPassword ? ", u.password_hash" : "";
 
   const [rows] = await pool.execute(
-    `SELECT ${columns} FROM users WHERE email = ? LIMIT 1`,
+    `SELECT ${PUBLIC_COLS}${extra} ${BASE_JOIN}
+     WHERE u.email = ? LIMIT 1`,
     [email.toLowerCase().trim()]
   );
   return rows[0] || null;
@@ -43,39 +53,35 @@ const findByEmail = async (email, withPassword = false) => {
 
 /**
  * Find a user by primary key.
- * @param {number} id
  */
 const findById = async (id) => {
   const pool = getPool();
   const [rows] = await pool.execute(
-    `SELECT id, name, email, role, is_active, is_email_verified, created_at, updated_at
-     FROM users WHERE id = ? LIMIT 1`,
+    `SELECT ${PUBLIC_COLS} ${BASE_JOIN} WHERE u.id = ? LIMIT 1`,
     [id]
   );
   return rows[0] || null;
 };
 
 /**
- * Mark user's email as verified.
- * @param {number} userId
+ * Activate a user's account (called after successful OTP verification).
+ * Equivalent to the old setEmailVerified — flips status → 'active'.
  */
-const setEmailVerified = async (userId) => {
+const activateUser = async (userId) => {
   const pool = getPool();
   await pool.execute(
-    `UPDATE users SET is_email_verified = 1 WHERE id = ?`,
+    `UPDATE users SET status = 'active' WHERE id = ?`,
     [userId]
   );
 };
 
 /**
- * Update user profile fields (name only for now; extend as needed).
- * @param {number} id
- * @param {{ name?: string }} fields
- * @returns {Promise<object>} Updated user
+ * Update profile fields.
+ * Allowed: name, phone.
  */
 const updateUser = async (id, fields) => {
   const pool = getPool();
-  const allowed = ["name"];
+  const allowed = ["name", "phone"];
   const updates = [];
   const values = [];
 
@@ -97,9 +103,7 @@ const updateUser = async (id, fields) => {
 };
 
 /**
- * Set a new password for a user (hashes the plain-text password).
- * @param {number} userId
- * @param {string} newPassword  Plain-text password
+ * Set a new hashed password.
  */
 const updatePassword = async (userId, newPassword) => {
   const pool = getPool();
@@ -111,10 +115,7 @@ const updatePassword = async (userId, newPassword) => {
 };
 
 /**
- * Compare a plain-text password against the stored hash.
- * @param {string} plainPassword
- * @param {string} storedHash
- * @returns {Promise<boolean>}
+ * Compare a plain password against the stored bcrypt hash.
  */
 const verifyPassword = async (plainPassword, storedHash) => {
   return bcrypt.compare(plainPassword, storedHash);
@@ -124,7 +125,7 @@ module.exports = {
   createUser,
   findByEmail,
   findById,
-  setEmailVerified,
+  activateUser,
   updateUser,
   updatePassword,
   verifyPassword,

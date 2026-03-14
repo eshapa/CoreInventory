@@ -5,7 +5,6 @@ const asyncHandler = require("express-async-handler");
 
 /**
  * protect — verifies the Bearer JWT and attaches the user to req.user.
- * Must be used before any authorised route handler.
  */
 const protect = asyncHandler(async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -15,7 +14,7 @@ const protect = asyncHandler(async (req, res, next) => {
   }
 
   const token = authHeader.split(" ")[1];
-  const decoded = verifyAccessToken(token); // throws AppError on failure
+  const decoded = verifyAccessToken(token);
 
   const user = await findById(decoded.id);
 
@@ -23,11 +22,11 @@ const protect = asyncHandler(async (req, res, next) => {
     throw new AppError("User associated with this token no longer exists", 401);
   }
 
-  if (!user.is_active) {
-    throw new AppError("Your account has been deactivated. Contact support.", 403);
+  if (user.status !== "active") {
+    throw new AppError("Your account is not active. Contact support.", 403);
   }
 
-  req.user = user;
+  req.user = user; // includes role_id, role_name from JOIN
   next();
 });
 
@@ -35,15 +34,14 @@ const protect = asyncHandler(async (req, res, next) => {
  * authorize — role-based guard factory.
  * Must be chained AFTER protect.
  *
- * @param {...string} roles  Allowed roles (e.g. 'inventory_manager', 'warehouse_staff')
- * @returns {import('express').RequestHandler}
+ * @param {...string} roles  Allowed role names e.g. 'inventory_manager'
  *
  * @example
- *   router.get('/reports', protect, authorize('inventory_manager'), getReports);
+ *   router.get('/reports', protect, authorize('inventory_manager'), handler);
  */
 const authorize = (...roles) =>
   (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    if (!req.user || !roles.includes(req.user.role_name)) {
       throw new AppError(
         `Access denied — requires one of: ${roles.join(", ")}`,
         403

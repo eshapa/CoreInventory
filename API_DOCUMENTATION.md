@@ -1,7 +1,7 @@
 # CoreInventory API Documentation
 
 > **Base URL:** `http://localhost:5000/api`  
-> **Version:** 1.0.0  
+> **Version:** 2.0.0  
 > **Last Updated:** 2026-03-14
 
 ---
@@ -14,104 +14,75 @@
 - [Error Codes](#error-codes)
 - [Rate Limiting](#rate-limiting)
 - [Endpoints](#endpoints)
-  - [Health Check](#health-check)
-  - [Auth Routes](#auth-routes-apauth)
-  - [User Routes](#user-routes-apiusers)
 
 ---
 
 ## Overview
 
-CoreInventory is an inventory management system with two distinct user roles:
+CoreInventory is a full-stack inventory management system backed by **TiDB**. It supports two roles:
 
-| Role | Value |
-|------|-------|
+| Role | `role_name` |
+|------|-------------|
 | Inventory Manager | `inventory_manager` |
 | Warehouse Staff | `warehouse_staff` |
 
-Authentication uses **stateless JWT** (Bearer tokens). Tokens are **not stored server-side**; logout is handled client-side by discarding the token.
+Role icons used below:
+- 🔑 = Inventory Manager only
+- 👥 = Both roles
 
 ---
 
 ## Authentication
 
-Protected routes require a valid JWT access token passed in the `Authorization` header:
+Stateless **JWT Bearer tokens** are issued on login / email verification.
 
 ```
 Authorization: Bearer <access_token>
 ```
 
-Tokens are issued on:
-- Successful email verification (`POST /api/auth/verify-email`)
-- Successful login (`POST /api/auth/login`)
+The JWT payload contains `{ id, role_id, role }` where `role` is the resolved role name.
 
 ---
 
 ## Response Format
 
-All endpoints return a consistent JSON envelope:
-
-### Success
 ```json
-{
-  "success": true,
-  "message": "Human-readable message",
-  "data": { }
-}
-```
+// Success
+{ "success": true, "message": "...", "data": { } }
 
-### Error
-```json
-{
-  "success": false,
-  "message": "Error description"
-}
-```
+// Error
+{ "success": false, "message": "..." }
 
-### Validation Error (422)
-```json
-{
-  "success": false,
-  "message": "Validation failed",
-  "errors": {
-    "fieldName": "Specific error for this field"
-  }
-}
+// Validation Error 422
+{ "success": false, "message": "Validation failed", "errors": { "field": "reason" } }
 ```
 
 ---
 
 ## Error Codes
 
-| Status Code | Meaning |
-|-------------|---------|
-| `200` | OK — request succeeded |
-| `201` | Created — resource created |
-| `400` | Bad Request — invalid OTP, expired token, etc. |
+| Code | Meaning |
+|------|---------|
+| `200` | OK |
+| `201` | Created |
+| `400` | Bad Request |
 | `401` | Unauthorized — missing/invalid JWT |
-| `403` | Forbidden — account not verified, deactivated, or wrong role |
-| `404` | Not Found — resource doesn't exist |
-| `409` | Conflict — duplicate resource (e.g., email already registered) |
-| `422` | Unprocessable Entity — validation failed |
-| `429` | Too Many Requests — rate limit exceeded |
+| `403` | Forbidden — account inactive or wrong role |
+| `404` | Not Found |
+| `409` | Conflict (duplicate) |
+| `422` | Validation Failed |
+| `429` | Rate Limited |
 | `500` | Internal Server Error |
 
 ---
 
 ## Rate Limiting
 
-Rate limits are enforced per **IP address**. Standard `RateLimit-*` headers (RFC 6585) are included in responses.
-
-| Limiter | Applied To | Max Requests | Window |
-|---------|-----------|-------------|--------|
-| `authLimiter` | `/register`, `/login` | 10 | 15 minutes |
-| `otpLimiter` | `/verify-email`, `/resend-otp` | 3 | 10 minutes |
-| `resetLimiter` | `/forgot-password`, `/verify-reset-otp`, `/reset-password` | 5 | 30 minutes |
-
-> **429 response body:**
-> ```json
-> { "success": false, "message": "Too many attempts. Please try again in 15 minutes." }
-> ```
+| Limiter | Applied To | Max | Window |
+|---------|-----------|-----|--------|
+| `authLimiter` | `/register`, `/login` | 10 | 15 min |
+| `otpLimiter` | `/verify-email`, `/resend-otp` | 3 | 10 min |
+| `resetLimiter` | `/forgot-password`, `/verify-reset-otp`, `/reset-password` | 5 | 30 min |
 
 ---
 
@@ -119,605 +90,459 @@ Rate limits are enforced per **IP address**. Standard `RateLimit-*` headers (RFC
 
 ---
 
-### Health Check
+### `GET /api/health`
+Public. Returns server status.
 
-#### `GET /api/health`
-
-Check server status. No authentication required.
-
-**Response `200`:**
 ```json
-{
-  "success": true,
-  "status": "OK",
-  "timestamp": "2026-03-14T10:59:00.000Z",
-  "environment": "development"
-}
+{ "success": true, "status": "OK", "timestamp": "...", "environment": "development" }
 ```
 
 ---
 
-### Auth Routes `/api/auth`
+## Auth — `/api/auth`
+
+### `POST /api/auth/register`
+**Public** · Rate: authLimiter
+
+```json
+// Request
+{ "name": "John Doe", "email": "john@example.com", "phone": "+911234567890",
+  "password": "Password@123", "role": "inventory_manager" }
+
+// 201 Response
+{ "data": { "user": { "id": 1, "name": "...", "email": "...", "phone": "...",
+  "role_id": 1, "role": "inventory_manager", "status": "inactive", "createdAt": "..." } } }
+```
+
+| Field | Rules |
+|-------|-------|
+| `name` | 2–100 chars |
+| `email` | valid email |
+| `phone` | optional, max 20 chars |
+| `password` | 8–72 chars, requires upper/lower/digit/special |
+| `role` | `"inventory_manager"` or `"warehouse_staff"` |
+
+Errors: `409` duplicate email · `422` validation
 
 ---
 
-#### `POST /api/auth/register`
+### `POST /api/auth/verify-email`
+**Public** · Rate: otpLimiter  
+Activates account (`status → active`) and returns access token.
 
-Register a new user account. A 6-digit email verification OTP is sent to the provided email address.
-
-**Rate limit:** `authLimiter` (10 req / 15 min)  
-**Access:** Public
-
-**Request Body:**
 ```json
-{
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "Password@123",
-  "role": "inventory_manager"
-}
+// Request
+{ "email": "john@example.com", "otp": "482910" }
+
+// 200 Response
+{ "data": { "user": { ... , "status": "active" }, "accessToken": "<jwt>" } }
 ```
 
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `name` | string | ✅ | 2–100 characters |
-| `email` | string | ✅ | Valid email, lowercased |
-| `password` | string | ✅ | 8–72 chars; must include uppercase, lowercase, digit, and special char (`@$!%*?&`) |
-| `role` | string | ✅ | `"inventory_manager"` or `"warehouse_staff"` |
-
-**Response `201`:**
-```json
-{
-  "success": true,
-  "message": "Account created. Please check your email for the verification code.",
-  "data": {
-    "user": {
-      "id": 1,
-      "name": "John Doe",
-      "email": "john@example.com",
-      "role": "inventory_manager",
-      "isEmailVerified": false,
-      "isActive": true,
-      "createdAt": "2026-03-14T10:00:00.000Z"
-    }
-  }
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `409` | Email already registered |
-| `422` | Validation failure |
+Errors: `400` invalid/expired OTP · `404` email not found
 
 ---
 
-#### `POST /api/auth/verify-email`
+### `POST /api/auth/resend-otp`
+**Public** · Rate: otpLimiter
 
-Verify a user's email address using the OTP sent during registration.  
-Returns an `accessToken` — the user is **logged in** upon successful verification.
-
-**Rate limit:** `otpLimiter` (3 req / 10 min)  
-**Access:** Public
-
-**Request Body:**
 ```json
-{
-  "email": "john@example.com",
-  "otp": "482910"
-}
+{ "email": "john@example.com", "type": "EMAIL_VERIFY" }
+// type: "EMAIL_VERIFY" | "PASSWORD_RESET"
 ```
 
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `email` | string | ✅ | Valid email |
-| `otp` | string | ✅ | Exactly 6 digits |
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Email verified successfully. You are now logged in.",
-  "data": {
-    "user": {
-      "id": 1,
-      "name": "John Doe",
-      "email": "john@example.com",
-      "role": "inventory_manager",
-      "isEmailVerified": true,
-      "isActive": true,
-      "createdAt": "2026-03-14T10:00:00.000Z"
-    },
-    "accessToken": "<jwt_token>"
-  }
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid or expired OTP |
-| `404` | No account found with this email |
+Always responds with `200` (prevents enumeration).
 
 ---
 
-#### `POST /api/auth/resend-otp`
+### `POST /api/auth/login`
+**Public** · Rate: authLimiter
 
-Resend a verification or password-reset OTP email.
-
-**Rate limit:** `otpLimiter` (3 req / 10 min)  
-**Access:** Public
-
-**Request Body:**
 ```json
-{
-  "email": "john@example.com",
-  "type": "EMAIL_VERIFY"
-}
+// Request
+{ "email": "john@example.com", "password": "Password@123" }
+
+// 200 Response
+{ "data": { "user": { ... }, "accessToken": "<jwt>" } }
 ```
 
-| Field | Type | Required | Values |
-|-------|------|----------|--------|
-| `email` | string | ✅ | Valid email |
-| `type` | string | ✅ | `"EMAIL_VERIFY"` or `"PASSWORD_RESET"` |
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "A new OTP has been sent to your email.",
-  "data": null
-}
-```
-
-> **Note:** If the email does not exist or the account is inactive, the API **still returns 200** to prevent user enumeration.
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `400` | Email is already verified (when `type` is `EMAIL_VERIFY`) |
+Errors: `401` invalid credentials · `403` account not active
 
 ---
 
-#### `POST /api/auth/login`
+### `POST /api/auth/forgot-password`
+**Public** · Rate: resetLimiter  
+Sends 6-digit reset OTP. Always responds `200`.
 
-Authenticate with email and password. Returns a JWT `accessToken`.
-
-**Rate limit:** `authLimiter` (10 req / 15 min)  
-**Access:** Public
-
-**Request Body:**
 ```json
-{
-  "email": "john@example.com",
-  "password": "Password@123"
-}
-```
-
-| Field | Type | Required |
-|-------|------|----------|
-| `email` | string | ✅ |
-| `password` | string | ✅ |
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Login successful",
-  "data": {
-    "user": {
-      "id": 1,
-      "name": "John Doe",
-      "email": "john@example.com",
-      "role": "inventory_manager",
-      "isEmailVerified": true,
-      "isActive": true,
-      "createdAt": "2026-03-14T10:00:00.000Z"
-    },
-    "accessToken": "<jwt_token>"
-  }
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `401` | Invalid email or password (generic — prevents enumeration) |
-| `403` | Email not yet verified |
-
----
-
-#### `POST /api/auth/forgot-password`
-
-Initiate the password reset flow. Sends a 6-digit OTP to the provided email.
-
-**Rate limit:** `resetLimiter` (5 req / 30 min)  
-**Access:** Public
-
-**Request Body:**
-```json
-{
-  "email": "john@example.com"
-}
-```
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "If an account with that email exists, a reset code has been sent.",
-  "data": null
-}
-```
-
-> **Note:** Always returns 200 regardless of whether the email exists (prevents enumeration).
-
----
-
-#### `POST /api/auth/verify-reset-otp`
-
-Verify the password-reset OTP. Returns a short-lived `resetToken` (valid 15 minutes) that must be used in the next step.
-
-**Rate limit:** `resetLimiter` (5 req / 30 min)  
-**Access:** Public
-
-**Request Body:**
-```json
-{
-  "email": "john@example.com",
-  "otp": "193847"
-}
-```
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "OTP verified. Use the resetToken to set your new password.",
-  "data": {
-    "resetToken": "<short_lived_jwt>"
-  }
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid or expired OTP |
-
----
-
-#### `POST /api/auth/reset-password`
-
-Set a new password using the `resetToken` obtained from `POST /api/auth/verify-reset-otp`.
-
-**Rate limit:** `resetLimiter` (5 req / 30 min)  
-**Access:** Public
-
-**Request Body:**
-```json
-{
-  "resetToken": "<short_lived_jwt>",
-  "newPassword": "NewPassword@456"
-}
-```
-
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `resetToken` | string | ✅ | JWT issued by `verify-reset-otp` |
-| `newPassword` | string | ✅ | 8–72 chars; uppercase, lowercase, digit, special char |
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Password reset successful. Please log in with your new password.",
-  "data": null
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid or expired `resetToken` |
-| `404` | User not found or inactive |
-
----
-
-#### `GET /api/auth/me`
-
-Get the currently authenticated user's profile.
-
-**Access:** 🔒 Private (JWT required)
-
-**Headers:**
-```
-Authorization: Bearer <access_token>
-```
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "",
-  "data": {
-    "user": {
-      "id": 1,
-      "name": "John Doe",
-      "email": "john@example.com",
-      "role": "inventory_manager",
-      "isEmailVerified": true,
-      "isActive": true,
-      "createdAt": "2026-03-14T10:00:00.000Z"
-    }
-  }
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `401` | Missing or invalid JWT |
-| `404` | User no longer exists |
-
----
-
-#### `PUT /api/auth/me`
-
-Update the authenticated user's own profile (name only).
-
-**Access:** 🔒 Private (JWT required)
-
-**Request Body:**
-```json
-{
-  "name": "John Updated"
-}
-```
-
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `name` | string | ✅ | 2–100 characters |
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Profile updated successfully",
-  "data": {
-    "user": {
-      "id": 1,
-      "name": "John Updated",
-      "email": "john@example.com",
-      "role": "inventory_manager",
-      "isEmailVerified": true,
-      "isActive": true,
-      "createdAt": "2026-03-14T10:00:00.000Z"
-    }
-  }
-}
+{ "email": "john@example.com" }
 ```
 
 ---
 
-#### `POST /api/auth/logout`
+### `POST /api/auth/verify-reset-otp`
+**Public** · Rate: resetLimiter
 
-Logout the current user. Stateless — the client must discard the JWT.
-
-**Access:** 🔒 Private (JWT required)
-
-**Response `200`:**
 ```json
-{
-  "success": true,
-  "message": "Logged out successfully",
-  "data": null
-}
+// Request
+{ "email": "john@example.com", "otp": "193847" }
+// 200 Response
+{ "data": { "resetToken": "<short_lived_jwt>" } }
 ```
 
 ---
 
-### User Routes `/api/users`
+### `POST /api/auth/reset-password`
+**Public** · Rate: resetLimiter
 
-> All routes in this group require a valid JWT (`Authorization: Bearer <token>`).
+```json
+{ "resetToken": "<short_lived_jwt>", "newPassword": "NewPass@456" }
+```
+
+Errors: `400` invalid/expired token
 
 ---
 
-#### `GET /api/users/profile`
+### `GET /api/auth/me`  🔒 Private
+Returns the authenticated user.
 
-Get the authenticated user's profile.
-
-**Access:** 🔒 Private — both roles
-
-**Response `200`:**
 ```json
-{
-  "success": true,
-  "message": "",
-  "data": {
-    "user": {
-      "id": 1,
-      "name": "John Doe",
-      "email": "john@example.com",
-      "role": "inventory_manager",
-      "isEmailVerified": true,
-      "isActive": true,
-      "createdAt": "2026-03-14T10:00:00.000Z"
-    }
-  }
-}
+{ "data": { "user": { "id":1, "name":"...", "email":"...", "phone":"...",
+  "role_id":1, "role":"inventory_manager", "status":"active", "createdAt":"..." } } }
 ```
 
 ---
 
-#### `PUT /api/users/profile`
+### `PUT /api/auth/me`  🔒 Private
+Update own name and/or phone.
 
-Update the authenticated user's name.
-
-**Access:** 🔒 Private — both roles
-
-**Request Body:**
 ```json
-{
-  "name": "Jane Doe"
-}
-```
-
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `name` | string | ✅ | Minimum 2 characters |
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Profile updated successfully",
-  "data": {
-    "user": {
-      "id": 1,
-      "name": "Jane Doe",
-      "email": "john@example.com",
-      "role": "inventory_manager",
-      "isEmailVerified": true,
-      "isActive": true,
-      "createdAt": "2026-03-14T10:00:00.000Z"
-    }
-  }
-}
+{ "name": "Updated Name", "phone": "+919876543210" }
 ```
 
 ---
 
-#### `GET /api/users/dashboard`
-
-Access the Inventory Manager dashboard.
-
-**Access:** 🔒 Private — `inventory_manager` role only
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Dashboard — Inventory Manager only",
-  "user": {
-    "id": 1,
-    "role": "inventory_manager"
-  }
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `403` | Role is not `inventory_manager` |
+### `POST /api/auth/logout`  🔒 Private
+Stateless logout — client must discard token.
 
 ---
 
-#### `GET /api/users/operations`
+## Users — `/api/users`
 
-Access Warehouse Staff operational data.
-
-**Access:** 🔒 Private — `warehouse_staff` role only
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Operations — Warehouse Staff only",
-  "user": {
-    "id": 2,
-    "role": "warehouse_staff"
-  }
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| `403` | Role is not `warehouse_staff` |
+| Method | Route | Access | Description |
+|--------|-------|--------|-------------|
+| GET | `/profile` | 👥 Both | Get own profile |
+| PUT | `/profile` | 👥 Both | Update own name/phone |
 
 ---
 
-#### `GET /api/users/shared`
+## Warehouses — `/api/warehouses`
 
-Access a shared route available to both roles.
+| Method | Route | Access | Description |
+|--------|-------|--------|-------------|
+| GET | `/` | 👥 Both | List all warehouses |
+| GET | `/:id` | 👥 Both | Get warehouse by ID |
+| POST | `/` | 🔑 Manager | Create warehouse |
+| PUT | `/:id` | 🔑 Manager | Update warehouse |
+| DELETE | `/:id` | 🔑 Manager | Delete warehouse |
 
-**Access:** 🔒 Private — `inventory_manager` or `warehouse_staff`
+**Warehouse Object:**
+```json
+{ "id": 1, "name": "Main Warehouse", "location": "Bangalore", "capacity": 5000, "created_at": "..." }
+```
 
-**Response `200`:**
+**POST/PUT body:**
+```json
+{ "name": "Main Warehouse", "location": "Bangalore", "capacity": 5000 }
+```
+
+---
+
+## Categories — `/api/categories`
+
+| Method | Route | Access |
+|--------|-------|--------|
+| GET | `/` | 👥 Both |
+| GET | `/:id` | 👥 Both |
+| POST | `/` | 🔑 Manager |
+| PUT | `/:id` | 🔑 Manager |
+| DELETE | `/:id` | 🔑 Manager |
+
+**Body:** `{ "name": "Electronics", "description": "..." }`
+
+---
+
+## Products — `/api/products`
+
+| Method | Route | Access | Description |
+|--------|-------|--------|-------------|
+| GET | `/` | 👥 Both | List products (optional `?categoryId=`) |
+| GET | `/:id` | 👥 Both | Get by ID |
+| GET | `/sku/:sku` | 👥 Both | Get by SKU |
+| POST | `/` | 🔑 Manager | Create product |
+| PUT | `/:id` | 🔑 Manager | Update product |
+| DELETE | `/:id` | 🔑 Manager | Delete product |
+
+**Product Object:**
+```json
+{ "id": 1, "name": "Widget A", "sku": "WGT-001", "category_id": 2,
+  "category_name": "Electronics", "description": "...", "unit": "pcs",
+  "reorder_level": 10, "qr_code": null, "created_at": "..." }
+```
+
+Errors: `409` duplicate SKU
+
+---
+
+## Suppliers — `/api/suppliers`
+
+🔑 Manager only for all operations.
+
+```json
+{ "name": "ABC Supplies", "contact_person": "Raj", "phone": "9876543210",
+  "email": "raj@abc.com", "address": "Mumbai" }
+```
+
+---
+
+## Customers — `/api/customers`
+
+🔑 Manager only for all operations.
+
+```json
+{ "name": "XYZ Corp", "phone": "9876543210", "email": "xyz@corp.com", "address": "Delhi" }
+```
+
+---
+
+## Inventory — `/api/inventory`
+
+| Method | Route | Access | Description |
+|--------|-------|--------|-------------|
+| GET | `/?warehouseId=` | 👥 Both | Stock levels for a warehouse |
+| GET | `/product/:productId` | 👥 Both | Stock across all warehouses |
+| GET | `/ledger` | 👥 Both | Audit trail (query: `productId`, `warehouseId`, `limit`) |
+
+**Stock Object:**
+```json
+{ "id": 1, "product_id": 5, "warehouse_id": 1, "quantity": 120,
+  "product_name": "Widget A", "sku": "WGT-001", "unit": "pcs",
+  "reorder_level": 10, "category_name": "Electronics", "updated_at": "..." }
+```
+
+**Ledger Entry Object:**
+```json
+{ "id": 1, "product_id": 5, "warehouse_id": 1, "product_name": "Widget A",
+  "warehouse_name": "Main", "operation_type": "receipt", "quantity_change": 50,
+  "reference_id": 3, "reference_type": "receipt", "created_by_name": "John", "created_at": "..." }
+```
+
+`operation_type` values: `receipt · delivery · transfer_in · transfer_out · adjustment`
+
+---
+
+## Receipts — `/api/receipts`
+
+Goods arriving from suppliers into a warehouse.
+
+| Method | Route | Access |
+|--------|-------|--------|
+| GET | `/` | 👥 Both |
+| GET | `/:id` | 👥 Both |
+| POST | `/` | 🔑 Manager |
+| PATCH | `/:id/status` | 🔑 Manager |
+
+**Query params (GET /):** `?warehouseId=&status=`
+
+**Create Body:**
 ```json
 {
-  "success": true,
-  "message": "Shared route — both roles allowed",
-  "user": {
-    "id": 1,
-    "role": "inventory_manager"
-  }
+  "supplier_id": 1,
+  "warehouse_id": 1,
+  "notes": "First batch",
+  "items": [
+    { "product_id": 5, "quantity": 100, "unit_price": 29.99 }
+  ]
 }
+```
+
+**Status Update:**
+```json
+{ "status": "done" }
+// status: "draft" | "ready" | "done" | "cancelled"
+```
+
+> ⚡ When status → `done`: inventory_stocks is incremented and a `stock_ledger` entry is written atomically.
+
+---
+
+## Deliveries — `/api/deliveries`
+
+Goods going out to customers from a warehouse.
+
+| Method | Route | Access |
+|--------|-------|--------|
+| GET | `/` | 👥 Both |
+| GET | `/:id` | 👥 Both |
+| POST | `/` | 🔑 Manager |
+| PATCH | `/:id/status` | 🔑 Manager |
+
+**Create Body:**
+```json
+{
+  "customer_id": 2,
+  "warehouse_id": 1,
+  "notes": "Urgent delivery",
+  "items": [
+    { "product_id": 5, "quantity": 20, "unit_price": 49.99 }
+  ]
+}
+```
+
+> ⚡ When status → `done`: validates sufficient stock, then decrements inventory and writes ledger.  
+> Returns `422` if stock is insufficient for any item.
+
+---
+
+## Transfers — `/api/transfers`
+
+Move stock between warehouses.
+
+| Method | Route | Access |
+|--------|-------|--------|
+| GET | `/` | 👥 Both |
+| GET | `/:id` | 👥 Both |
+| POST | `/` | 🔑 Manager |
+| PATCH | `/:id/status` | 🔑 Manager |
+
+**Create Body:**
+```json
+{
+  "source_warehouse_id": 1,
+  "destination_warehouse_id": 2,
+  "notes": "Rebalancing stock",
+  "items": [
+    { "product_id": 5, "quantity": 30 }
+  ]
+}
+```
+
+> ⚡ When status → `done`: decrements source, increments destination, writes `transfer_out` + `transfer_in` ledger entries.
+
+---
+
+## Stock Adjustments — `/api/stock-adjustments`
+
+🔑 Manager only. Correct discrepancies between system and actual counts.
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/` | List (query: `?productId=&warehouseId=`) |
+| GET | `/:id` | Get by ID |
+| POST | `/` | Create adjustment |
+
+**Create Body:**
+```json
+{
+  "product_id": 5,
+  "warehouse_id": 1,
+  "system_quantity": 120,
+  "actual_quantity": 115,
+  "reason": "Physical count discrepancy"
+}
+```
+
+> ⚡ Sets `inventory_stocks.quantity` to `actual_quantity` and writes an `adjustment` ledger entry.
+
+---
+
+## Alerts — `/api/alerts`
+
+| Method | Route | Access | Description |
+|--------|-------|--------|-------------|
+| GET | `/` | 👥 Both | List alerts (query: `?isResolved=true\|false&alertType=`) |
+| GET | `/:id` | 👥 Both | Get alert |
+| PATCH | `/:id/resolve` | 🔑 Manager | Mark resolved |
+
+**Alert Object:**
+```json
+{ "id": 1, "product_id": 5, "warehouse_id": 1, "product_name": "Widget A",
+  "warehouse_name": "Main", "alert_type": "low_stock", "message": "...",
+  "is_resolved": 0, "created_at": "..." }
+```
+
+`alert_type`: `low_stock · out_of_stock`
+
+---
+
+## Notifications — `/api/notifications`
+
+Each user sees only their own notifications.
+
+| Method | Route | Access | Description |
+|--------|-------|--------|-------------|
+| GET | `/` | 👥 Both | List my notifications |
+| PATCH | `/:id/read` | 👥 Both | Mark one as read |
+| PATCH | `/read-all` | 👥 Both | Mark all as read |
+
+**Notification Object:**
+```json
+{ "id": 1, "user_id": 1, "alert_id": 3, "alert_type": "low_stock",
+  "title": "Low Stock Alert", "message": "Widget A is running low",
+  "is_read": 0, "created_at": "..." }
+```
+
+---
+
+## Key Flows
+
+### Registration & Login
+```
+POST /api/auth/register → OTP sent to email
+POST /api/auth/verify-email (OTP) → account active + accessToken
+POST /api/auth/login → accessToken
+```
+
+### Password Reset
+```
+POST /api/auth/forgot-password → OTP sent
+POST /api/auth/verify-reset-otp → resetToken (15 min)
+POST /api/auth/reset-password (resetToken + newPassword)
+```
+
+### Goods In Flow
+```
+POST /api/receipts (draft)
+PATCH /api/receipts/:id/status { "status": "ready" }
+PATCH /api/receipts/:id/status { "status": "done" } → stock updated + ledger written
+```
+
+### Goods Out Flow
+```
+POST /api/deliveries (draft)
+PATCH /api/deliveries/:id/status { "status": "done" } → stock decremented (validates availability)
+```
+
+### Transfer Flow
+```
+POST /api/transfers { source, destination, items }
+PATCH /api/transfers/:id/status { "status": "done" } → atomic bi-directional stock move
 ```
 
 ---
 
 ## Password Rules
-
-Passwords must satisfy **all** of the following:
-- Minimum **8** characters, maximum **72** characters
-- At least one **uppercase** letter (`A-Z`)
-- At least one **lowercase** letter (`a-z`)
-- At least one **digit** (`0-9`)
-- At least one **special character** from: `@ $ ! % * ? &`
+Must be 8–72 characters with at least one: uppercase, lowercase, digit, and special char (`@$!%*?&`).
 
 ---
 
-## User Object (Safe)
-
-All API responses expose a sanitized user object — internal fields like `password_hash` are never returned.
-
-```json
-{
-  "id": 1,
-  "name": "John Doe",
-  "email": "john@example.com",
-  "role": "inventory_manager",
-  "isEmailVerified": true,
-  "isActive": true,
-  "createdAt": "2026-03-14T10:00:00.000Z"
-}
-```
-
----
-
-## Registration & Login Flow
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     REGISTRATION FLOW                       │
-├─────────────────────────────────────────────────────────────┤
-│  1. POST /api/auth/register      → Account created          │
-│  2. Check email for 6-digit OTP                             │
-│  3. POST /api/auth/verify-email  → Verified + accessToken   │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│                     PASSWORD RESET FLOW                     │
-├─────────────────────────────────────────────────────────────┤
-│  1. POST /api/auth/forgot-password   → OTP sent to email    │
-│  2. POST /api/auth/verify-reset-otp  → resetToken returned  │
-│  3. POST /api/auth/reset-password    → Password updated     │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## CORS Configuration
-
+## CORS
 | Setting | Value |
 |---------|-------|
-| Allowed Origin | `CLIENT_URL` env var (default: `http://localhost:5173`) |
-| Allowed Methods | `GET, POST, PUT, PATCH, DELETE, OPTIONS` |
-| Allowed Headers | `Content-Type, Authorization` |
-| Credentials | `true` |
+| Origin | `CLIENT_URL` env (default: `http://localhost:5173`) |
+| Methods | GET, POST, PUT, PATCH, DELETE, OPTIONS |
+| Headers | Content-Type, Authorization |
+| Credentials | true |
 
 ---
 
-*Generated for CoreInventory Backend — Express.js + TiDB*
+*CoreInventory Backend — Express.js + TiDB*
