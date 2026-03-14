@@ -72,6 +72,9 @@ app.use("/api/dashboard",          require("./routes/dashboardRoutes"));
 // Reports & Analytics
 app.use("/api/reports",            require("./routes/reportRoutes"));
 
+// QR / Barcode Scanner
+app.use("/api/qr",                 require("./routes/qrRoutes"));
+
 /* ═══════════════════════════════════════════
    HEALTH CHECK
 ═══════════════════════════════════════════ */
