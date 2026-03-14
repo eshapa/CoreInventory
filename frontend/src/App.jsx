@@ -11,6 +11,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 
 // Pages
+import RegisterPage from "./pages/RegisterPage";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import ProductsPage from "./pages/ProductsPage";
@@ -21,7 +22,6 @@ import AlertsPage from "./pages/AlertsPage";
 import ReportsPage from "./pages/ReportsPage";
 import ScannerPage from "./pages/ScannerPage";
 import ProfilePage from "./pages/ProfilePage";
-import RegisterPage from "./pages/RegisterPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import VerifyEmailPage from "./pages/VerifyEmailPage";
 import NotFound from "./pages/NotFound";
@@ -32,7 +32,6 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-
         <Toaster />
         <Sonner />
 
@@ -70,7 +69,6 @@ function App() {
             </Routes>
           </AuthProvider>
         </BrowserRouter>
-
       </TooltipProvider>
     </QueryClientProvider>
   );
