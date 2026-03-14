@@ -21,9 +21,25 @@ exports.update    = asyncHandler(async (req, res) => {
   const updated = await model.update(req.params.id, req.body);
   return sendSuccess(res, { warehouse: updated }, "Warehouse updated");
 });
-exports.remove    = asyncHandler(async (req, res) => {
+exports.remove = asyncHandler(async (req, res) => {
   const w = await model.findById(req.params.id);
   if (!w) throw new AppError("Warehouse not found", 404);
-  await model.remove(req.params.id);
-  return sendSuccess(res, null, "Warehouse deleted");
+  
+  try {
+    await model.remove(req.params.id);
+    return sendSuccess(res, null, "Warehouse deleted");
+  } catch (error) {
+    if (error.status === 409) {
+      throw new AppError(error.message, 409);
+    }
+    throw error;
+  }
+});
+
+exports.getInventory = asyncHandler(async (req, res) => {
+  const w = await model.findById(req.params.id);
+  if (!w) throw new AppError("Warehouse not found", 404);
+  
+  const inventory = await model.findInventoryByWarehouse(req.params.id);
+  return sendSuccess(res, { inventory });
 });

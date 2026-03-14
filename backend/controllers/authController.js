@@ -125,6 +125,10 @@ const register = asyncHandler(async (req, res) => {
   // Send verification OTP
   const otp = generateOTP();
   await otpModel.createOtp(user.id, otp, "EMAIL_VERIFY", getOTPExpiry(10));
+  
+  // LOG OTP FOR EASY POSTMAN TESTING
+  console.log(`\n\n🎯 OTP for ${email}: ${otp}\n\n`);
+  
   await sendVerificationEmail(email, otp, name);
 
   return sendSuccess(

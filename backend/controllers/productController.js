@@ -54,8 +54,13 @@ exports.getStockAvailability = asyncHandler(async (req, res) => {
  *   initial_stock?, warehouse_id? (required if initial_stock is set)
  */
 exports.create = asyncHandler(async (req, res) => {
-  const { name, sku, category_id, description, unit, reorder_level,
+  let { name, sku, category_id, description, unit, reorder_level,
           initial_stock, warehouse_id } = req.body;
+
+  // Auto-generate SKU if not provided
+  if (!sku) {
+    sku = "PRD-" + Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
 
   if (!name || !sku) throw new AppError("name and sku are required", 422);
 
