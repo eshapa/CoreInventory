@@ -18,9 +18,22 @@ exports.getForProduct = asyncHandler(async (req, res) => {
   return sendSuccess(res, { stocks });
 });
 
-/** GET /api/inventory/ledger?productId=X&warehouseId=Y&limit=100 */
+/**
+ * GET /api/inventory/ledger?productId=&warehouseId=&operationType=&startDate=&endDate=&search=&limit=
+ * Move History — full stock ledger with rich filters.
+ */
 exports.getLedger = asyncHandler(async (req, res) => {
-  const { productId, warehouseId, limit } = req.query;
-  const entries = await ledgerModel.getHistory({ productId, warehouseId, limit });
+  const { productId, warehouseId, operationType, categoryId, startDate, endDate, search, limit } = req.query;
+  const entries = await ledgerModel.getHistory({ productId, warehouseId, operationType, categoryId, startDate, endDate, search, limit });
   return sendSuccess(res, { entries });
+});
+
+/**
+ * GET /api/inventory/ledger/summary?warehouseId=&startDate=&endDate=
+ * Movement summary grouped by operation type.
+ */
+exports.getLedgerSummary = asyncHandler(async (req, res) => {
+  const { warehouseId, startDate, endDate } = req.query;
+  const summary = await ledgerModel.getSummary({ warehouseId, startDate, endDate });
+  return sendSuccess(res, { summary });
 });
