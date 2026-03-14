@@ -13,6 +13,15 @@ const getForUser = async (userId) => {
   return rows;
 };
 
+const getUnreadCount = async (userId) => {
+  const pool = getPool();
+  const [[row]] = await pool.execute(
+    `SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND is_read = 0`,
+    [userId]
+  );
+  return Number(row.count);
+};
+
 const markRead = async (id, userId) => {
   const pool = getPool();
   await pool.execute(
@@ -37,4 +46,4 @@ const create = async ({ user_id, alert_id = null, title, message }) => {
   );
 };
 
-module.exports = { getForUser, markRead, markAllRead, create };
+module.exports = { getForUser, getUnreadCount, markRead, markAllRead, create };

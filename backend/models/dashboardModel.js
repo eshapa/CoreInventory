@@ -73,6 +73,30 @@ const getPendingCounts = async () => {
   };
 };
 
+/** Staff-specific pending counts and completed document summary */
+const getStaffKPIs = async (userId) => {
+  const pool = getPool();
+
+  const [
+    [[receiptsToday]],
+    [[deliveriesToday]],
+    [[pendingTransfers]],
+    [[lowStockAlerts]]
+  ] = await Promise.all([
+    pool.execute(`SELECT COUNT(*) AS count FROM receipts WHERE DATE(created_at) = CURDATE() AND created_by = ?`, [userId]),
+    pool.execute(`SELECT COUNT(*) AS count FROM deliveries WHERE DATE(created_at) = CURDATE() AND created_by = ?`, [userId]),
+    pool.execute(`SELECT COUNT(*) AS count FROM transfers WHERE status IN ('draft', 'ready') AND created_by = ?`, [userId]),
+    pool.execute(`SELECT COUNT(*) AS count FROM alerts WHERE is_resolved = FALSE`)
+  ]);
+
+  return {
+    todaysReceipts: Number(receiptsToday.count),
+    todaysDeliveries: Number(deliveriesToday.count),
+    pendingTransfers: Number(pendingTransfers.count),
+    lowStockAlerts: Number(lowStockAlerts.count)
+  };
+};
+
 /* ═══════════════════════════════════════════════
    CHART DATA QUERIES
    ═══════════════════════════════════════════════ */
@@ -218,4 +242,5 @@ module.exports = {
   getCategoryDistribution,
   getWarehouseDistribution,
   getFilteredDocuments,
+  getStaffKPIs,
 };

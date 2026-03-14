@@ -6,6 +6,7 @@ const BOTH = ["inventory_manager", "warehouse_staff"];
 
 // KPI Cards
 router.get("/kpis",       protect, authorize(...BOTH), ctrl.getKPIs);
+router.get("/staff-kpis", protect, authorize(...BOTH), ctrl.getStaffKPIs);
 router.get("/low-stock",  protect, authorize(...BOTH), ctrl.getLowStock);
 
 // Charts

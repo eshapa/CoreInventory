@@ -8,8 +8,8 @@ const model = require("../models/productModel");
  * List all products with optional filters.
  */
 exports.getAll = asyncHandler(async (req, res) => {
-  const { categoryId, search } = req.query;
-  const products = await model.findAll({ categoryId, search });
+  const { categoryId, search, qr_code } = req.query;
+  const products = await model.findAll({ categoryId, search, qr_code });
   return sendSuccess(res, { products });
 });
 

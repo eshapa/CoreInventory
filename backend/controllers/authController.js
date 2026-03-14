@@ -249,6 +249,36 @@ const updateMe = asyncHandler(async (req, res) => {
 });
 
 /**
+ * @desc    Change password while authenticated
+ * @route   PUT /api/auth/me/change-password
+ * @access  Private
+ */
+const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    throw new AppError("currentPassword and newPassword are required", 400);
+  }
+
+  // Basic complexity check (should match Joi schema regex later if needed)
+  if (newPassword.length < 8) {
+    throw new AppError("New password must be at least 8 characters long", 422);
+  }
+
+  const user = await userModel.findById(req.user.id);
+  if (!user) throw new AppError("User not found", 404);
+
+  // The model method findById does not return password_hash for safety. 
+  // We need to fetch the raw record with the password.
+  const rawUser = await userModel.findByEmail(user.email, true);
+
+  const isMatch = await userModel.verifyPassword(currentPassword, rawUser.password_hash);
+  if (!isMatch) throw new AppError("Incorrect current password", 401);
+
+  await userModel.updatePassword(req.user.id, newPassword);
+  return sendSuccess(res, null, "Password changed successfully");
+});
+
+/**
  * @desc    Initiate password reset
  * @route   POST /api/auth/forgot-password
  * @access  Public
@@ -322,7 +352,7 @@ const logout = asyncHandler(async (req, res) => {
 
 module.exports = {
   register, verifyEmail, resendOTP, login,
-  getMe, updateMe,
+  getMe, updateMe, changePassword,
   forgotPassword, verifyResetOTP, resetPassword,
   logout,
 };

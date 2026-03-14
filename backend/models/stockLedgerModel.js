@@ -30,8 +30,7 @@ const getHistory = async ({ productId, warehouseId, operationType, categoryId, s
   if (endDate)       { sql += " AND sl.created_at <= ?";      params.push(endDate); }
   if (search)        { sql += " AND (p.name LIKE ? OR p.sku LIKE ?)"; params.push(`%${search}%`, `%${search}%`); }
 
-  sql += ` ORDER BY sl.created_at DESC LIMIT ?`;
-  params.push(Number(limit));
+  sql += ` ORDER BY sl.created_at DESC LIMIT ${Number(limit) || 100}`;
   const [rows] = await pool.execute(sql, params);
   return rows;
 };

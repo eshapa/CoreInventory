@@ -8,13 +8,32 @@ const COLS = `
  * List all products with optional filters.
  * @param {{ categoryId?, search? }} filters
  */
-const findAll = async ({ categoryId, search } = {}) => {
+const findAll = async ({ categoryId, search, qr_code } = {}) => {
   const pool = getPool();
-  let sql = `SELECT ${COLS} FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE 1=1`;
+  let sql = `
+    SELECT p.id, p.name, p.sku, p.category_id, c.name AS category_name,
+           p.description, p.unit, p.reorder_level, p.qr_code, p.created_at,
+           COALESCE(SUM(s.quantity), 0) AS total_stock
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    LEFT JOIN inventory_stock s ON s.product_id = p.id
+    WHERE 1=1
+  `;
   const params = [];
-  if (categoryId) { sql += " AND p.category_id = ?"; params.push(categoryId); }
-  if (search)     { sql += " AND (p.name LIKE ? OR p.sku LIKE ?)"; params.push(`%${search}%`, `%${search}%`); }
-  sql += " ORDER BY p.name";
+
+  if (categoryId) {
+    sql += ` AND p.category_id = ?`;
+    params.push(categoryId);
+  }
+  if (qr_code) {
+    sql += ` AND p.qr_code = ?`;
+    params.push(qr_code);
+  }
+  if (search) {
+    sql += ` AND (p.name LIKE ? OR p.sku LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  sql += " GROUP BY p.id, p.name, p.sku, p.category_id, c.name, p.description, p.unit, p.reorder_level, p.qr_code, p.created_at ORDER BY p.name";
   const [rows] = await pool.execute(sql, params);
   return rows;
 };

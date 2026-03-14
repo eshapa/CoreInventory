@@ -24,6 +24,15 @@ exports.getKPIs = asyncHandler(async (req, res) => {
 });
 
 /**
+ * GET /api/dashboard/staff-kpis
+ * Returns scoped KPI numbers for the currently logged-in staff member.
+ */
+exports.getStaffKPIs = asyncHandler(async (req, res) => {
+  const kpis = await dashboard.getStaffKPIs(req.user.id);
+  return sendSuccess(res, kpis);
+});
+
+/**
  * GET /api/dashboard/low-stock
  * Returns the full list of low/out-of-stock items.
  */
