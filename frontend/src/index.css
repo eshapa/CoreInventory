@@ -1,0 +1,89 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme variables */
+:root {
+  --background: 220 20% 97%;
+  --foreground: 224 30% 12%;
+
+  --card: 0 0% 100%;
+  --border: 220 16% 90%;
+
+  --primary: 234 85% 55%;
+  --secondary: 220 16% 93%;
+
+  --success: 152 60% 42%;
+  --warning: 32 95% 55%;
+  --destructive: 0 72% 55%;
+
+  --sidebar-background: 230 25% 12%;
+  --sidebar-foreground: 220 20% 80%;
+  --sidebar-accent: 230 20% 18%;
+}
+
+/* Page background */
+body {
+  font-family: "Inter", system-ui, sans-serif;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  min-height: 100vh;
+}
+
+/* Cards */
+.glass-card {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+/* KPI Cards */
+.kpi-card {
+  padding: 20px;
+  transition: all 0.2s ease;
+}
+
+.kpi-card:hover {
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+}
+
+/* Sidebar */
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.sidebar-item-active {
+  background: hsl(var(--sidebar-accent));
+  color: white;
+}
+
+.sidebar-item-inactive {
+  color: hsl(var(--sidebar-foreground));
+}
+
+/* Table header */
+.table-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+/* Status badge */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
