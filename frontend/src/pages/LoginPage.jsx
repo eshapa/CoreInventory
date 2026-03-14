@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Box, Eye, EyeOff } from "lucide-react";
+import axios from "axios";
+import { Box, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,10 +12,24 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    navigate("/dashboard");
+    setError(null);
+    setIsLoading(true);
+    try {
+      const response = await axios.post("http://localhost:5000/api/auth/login", { email, password });
+      const token = response.data.data.accessToken;
+      localStorage.setItem("token", token);
+      navigate("/dashboard");
+    } catch (err) {
+      console.error(err);
+      setError(err.response?.data?.message || err.message || "Failed to login");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -56,6 +71,12 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
+            {error && (
+              <div className="p-3 text-sm text-red-500 bg-red-500/10 rounded-md flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                {error}
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="email" className="text-slate-700 font-semibold">Email Address</Label>
               <Input
@@ -101,8 +122,8 @@ export default function LoginPage() {
               <label htmlFor="remember" className="text-sm text-slate-500">Remember this device for 30 days</label>
             </div>
 
-            <Button type="submit" className="w-full h-12 bg-primary hover:bg-primary-600 text-white font-bold text-lg rounded-xl shadow-primary">
-              Sign In →
+            <Button type="submit" disabled={isLoading} className="w-full h-12 bg-primary hover:bg-primary-600 text-white font-bold text-lg rounded-xl shadow-primary">
+              {isLoading ? "Signing In..." : "Sign In →"}
             </Button>
           </form>
 
