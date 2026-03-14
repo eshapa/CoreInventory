@@ -66,6 +66,9 @@ app.use("/api/stock-adjustments",  require("./routes/stockAdjustmentRoutes"));
 app.use("/api/alerts",             require("./routes/alertRoutes"));
 app.use("/api/notifications",      require("./routes/notificationRoutes"));
 
+// Dashboard
+app.use("/api/dashboard",          require("./routes/dashboardRoutes"));
+
 /* ═══════════════════════════════════════════
    HEALTH CHECK
 ═══════════════════════════════════════════ */
